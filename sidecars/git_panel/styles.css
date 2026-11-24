@@ -965,7 +965,7 @@ tr.d-meta { color: var(--fg-muted); font-style: italic; }
   position: relative;
   display: flex;
   align-items: center;
-  height: 28px;
+  height: 30px;
   cursor: pointer;
 }
 .commit-row:hover { background: var(--hover); }
@@ -1012,26 +1012,33 @@ tr.d-meta { color: var(--fg-muted); font-style: italic; }
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
-  max-width: 44%;
+  max-width: 48%;
+  min-width: 0;
   overflow: hidden;
 }
 .ref-chip {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 3.5px;
   font-size: 10.5px;
   font-weight: 600;
-  padding: 1px 7px;
+  padding: 1.5px 8px;
   border-radius: 999px;
-  white-space: nowrap;
+  max-width: 175px;
+  min-width: 0;
+  flex: 0 1 auto;
   overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 150px;
   line-height: 1.45;
   color: #fff;
 }
+.ref-chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .ref-chip svg { flex-shrink: 0; }
-.ref-local { opacity: 0.92; }
+.ref-local { opacity: 0.94; }
 .ref-remote { opacity: 0.88; }
 .ref-tag { background: color-mix(in srgb, var(--c-mod) 22%, transparent); color: var(--c-mod); }
 

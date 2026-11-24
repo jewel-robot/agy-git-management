@@ -813,10 +813,10 @@
     }
   }
 
-  // ---------- Graph View & Compact VS Code-Style Continuous SVG ----------
-  const GRAPH_ROW_H = 28;
-  const GRAPH_COL_W = 13;
-  const GRAPH_PAD_X = 12;
+  // ---------- Graph View & Subway-Arc Continuous SVG ----------
+  const GRAPH_ROW_H = 30;
+  const GRAPH_COL_W = 14;
+  const GRAPH_PAD_X = 13;
 
   const REF_HEAD_ICON =
     '<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r="2" fill="currentColor" stroke="none"/></svg>';
@@ -952,34 +952,83 @@
     const xr = cx(e.railCol);
     const x2 = cx(e.toCol);
     const y2 = e.dangling ? e.toRow * GRAPH_ROW_H : cy(e.toRow);
-    const span = GRAPH_ROW_H * 0.86;
 
+    // Pure straight vertical rail
     if (x1 === xr && xr === x2) {
       return `M ${x1} ${y1} L ${x2} ${y2}`;
     }
 
+    // Subway-style quarter-circle elbow helper:
+    // Smooth horizontal-departure / vertical-arrival OR vertical-departure / horizontal-arrival
+    const drawMetroJoin = (sx, sy, tx, ty, exitHorizontal) => {
+      const dx = tx - sx;
+      const dy = ty - sy;
+      const adx = Math.abs(dx);
+      const dir = dx > 0 ? 1 : -1;
+      const r = Math.min(9.5, adx * 0.5, dy * 0.45);
+      if (adx <= GRAPH_COL_W + 1) {
+        // Adjacent lane: silky symmetric S-curve
+        const c = dy * 0.52;
+        return `M ${sx} ${sy} C ${sx} ${sy + c}, ${tx} ${ty - c}, ${tx} ${ty}`;
+      }
+      if (exitHorizontal) {
+        // Branch out from node horizontally, curve smoothly down into vertical rail
+        return `M ${sx} ${sy} L ${tx - dir * r} ${sy} Q ${tx} ${sy} ${tx} ${sy + r} L ${tx} ${ty}`;
+      }
+      // Ride vertical rail down, curve cleanly with a quarter-circle into target node
+      return `M ${sx} ${sy} L ${sx} ${ty - r} Q ${sx} ${ty} ${sx + dir * r} ${ty} L ${tx} ${ty}`;
+    };
+
+    // Single-row jump
     if (!e.dangling && e.toRow - e.fromRow === 1) {
-      const dy = (y2 - y1) * 0.56;
-      return `M ${x1} ${y1} C ${x1} ${y1 + dy}, ${x2} ${y2 - dy}, ${x2} ${y2}`;
+      // Branching right (merge out to secondary parent): exit horizontally into right rail
+      // Converging left (branch joining main trunk): ride down and quarter-circle left into trunk node
+      return drawMetroJoin(x1, y1, x2, y2, x2 > x1);
     }
 
-    const segs = [`M ${x1} ${y1}`];
+    const segs = [];
+    let curX = x1;
     let curY = y1;
 
+    // Top turn: x1 -> xr
     if (x1 !== xr) {
-      const yEnd = Math.min(y1 + span, y2);
-      const dy = (yEnd - y1) * 0.56;
-      segs.push(`C ${x1} ${y1 + dy}, ${xr} ${yEnd - dy}, ${xr} ${yEnd}`);
-      curY = yEnd;
+      const dx = xr - x1;
+      const dir = dx > 0 ? 1 : -1;
+      const adx = Math.abs(dx);
+      const r = Math.min(9.5, adx * 0.5, GRAPH_ROW_H * 0.46);
+      if (adx <= GRAPH_COL_W + 1) {
+        const yEnd = Math.min(y1 + GRAPH_ROW_H * 0.85, y2);
+        const c = (yEnd - y1) * 0.52;
+        segs.push(`M ${x1} ${y1} C ${x1} ${y1 + c}, ${xr} ${yEnd - c}, ${xr} ${yEnd}`);
+        curY = yEnd;
+      } else {
+        // Smooth horizontal metro branch-out at y1 into rail xr
+        segs.push(`M ${x1} ${y1} L ${xr - dir * r} ${y1} Q ${xr} ${y1} ${xr} ${y1 + r}`);
+        curY = y1 + r;
+      }
+      curX = xr;
+    } else {
+      segs.push(`M ${x1} ${y1}`);
     }
 
+    // Bottom turn: xr -> x2
     if (xr !== x2 && !e.dangling) {
-      const yStart = Math.max(y2 - span, curY);
-      if (yStart > curY) segs.push(`L ${xr} ${yStart}`);
-      const dy = (y2 - yStart) * 0.56;
-      segs.push(`C ${xr} ${yStart + dy}, ${x2} ${y2 - dy}, ${x2} ${y2}`);
+      const dx = x2 - xr;
+      const dir = dx > 0 ? 1 : -1;
+      const adx = Math.abs(dx);
+      const r = Math.min(9.5, adx * 0.5, Math.max(y2 - curY, 4) * 0.46);
+      if (adx <= GRAPH_COL_W + 1) {
+        const yStart = Math.max(y2 - GRAPH_ROW_H * 0.85, curY);
+        if (yStart > curY) segs.push(`L ${xr} ${yStart}`);
+        const c = (y2 - yStart) * 0.52;
+        segs.push(`C ${xr} ${yStart + c}, ${x2} ${y2 - c}, ${x2} ${y2}`);
+      } else {
+        const yTurn = Math.max(y2 - r, curY);
+        if (yTurn > curY) segs.push(`L ${xr} ${yTurn}`);
+        segs.push(`Q ${xr} ${y2} ${xr + dir * r} ${y2} L ${x2} ${y2}`);
+      }
     } else if (y2 > curY) {
-      segs.push(`L ${xr} ${y2}`);
+      segs.push(`L ${curX} ${y2}`);
     }
 
     return segs.join(' ');
@@ -993,15 +1042,24 @@
     const cy = (row) => row * GRAPH_ROW_H + GRAPH_ROW_H / 2;
     const colColor = (idx) => palette[idx % palette.length];
 
-    const curved = [];
     const straight = [];
+    const curved = [];
     for (const e of layout.edges) {
       const d = buildEdgePath(e, cx, cy);
       const stroke = colColor(e.color);
-      const opacity = e.dangling ? '0.62' : '0.9';
-      const el = `<path d="${d}" fill="none" stroke="${stroke}" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" opacity="${opacity}"/>`;
-      if (e.fromCol === e.railCol && e.railCol === e.toCol) straight.push(el);
-      else curved.push(el);
+      const opacity = e.dangling ? '0.58' : '0.92';
+      const isStraight = e.fromCol === e.railCol && e.railCol === e.toCol;
+      if (isStraight) {
+        straight.push(
+          `<path d="${d}" fill="none" stroke="${stroke}" stroke-width="1.85" stroke-linecap="round" opacity="${opacity}"/>`
+        );
+      } else {
+        // Subtle surface bridge halo under curved joins so crossing rails never visually clash
+        curved.push(
+          `<path d="${d}" fill="none" stroke="var(--surface)" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.88"/>` +
+          `<path d="${d}" fill="none" stroke="${stroke}" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" opacity="${opacity}"/>`
+        );
+      }
     }
 
     const dots = layout.nodes.map((n) => {
@@ -1009,20 +1067,25 @@
       const y = cy(n.row);
       const c = colColor(n.color);
       if (n.isHead) {
-        return `<circle cx="${x}" cy="${y}" r="4.3" fill="var(--surface)" stroke="${c}" stroke-width="2.2"/>`;
+        return `<g>
+          <circle cx="${x}" cy="${y}" r="7" fill="${c}" opacity="0.16"/>
+          <circle cx="${x}" cy="${y}" r="5.6" fill="var(--surface)"/>
+          <circle cx="${x}" cy="${y}" r="4.2" fill="var(--surface)" stroke="${c}" stroke-width="2.1"/>
+        </g>`;
       }
       if (n.isMerge) {
         return `<g>
-          <circle cx="${x}" cy="${y}" r="4.3" fill="var(--surface)" stroke="${c}" stroke-width="1.75"/>
+          <circle cx="${x}" cy="${y}" r="5.6" fill="var(--surface)"/>
+          <circle cx="${x}" cy="${y}" r="4.2" fill="var(--surface)" stroke="${c}" stroke-width="1.75"/>
           <circle cx="${x}" cy="${y}" r="1.8" fill="${c}"/>
         </g>`;
       }
-      return `<circle cx="${x}" cy="${y}" r="3.4" fill="${c}" stroke="var(--surface)" stroke-width="1.5"/>`;
+      return `<circle cx="${x}" cy="${y}" r="3.5" fill="${c}" stroke="var(--surface)" stroke-width="1.9"/>`;
     });
 
     return {
       width,
-      svg: `<svg class="graph-svg-overlay" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" aria-hidden="true">${curved.join('')}${straight.join('')}${dots.join('')}</svg>`,
+      svg: `<svg class="graph-svg-overlay" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" aria-hidden="true">${straight.join('')}${curved.join('')}${dots.join('')}</svg>`,
     };
   }
 
@@ -1043,15 +1106,15 @@
       .map((c, idx) => {
         const node = layout.nodes[idx];
         const laneColor = palette[(node?.color || 0) % palette.length];
-        const rowPadLeft = GRAPH_PAD_X + (layout.rowMaxCol[idx] || 0) * GRAPH_COL_W + 13;
+        const rowPadLeft = GRAPH_PAD_X + (layout.rowMaxCol[idx] || 0) * GRAPH_COL_W + 14;
 
         const refsHtml = (c.refs || [])
           .map((r) => {
             if (r.type === 'tag') {
-              return `<span class="ref-chip ref-tag" title="Tag: ${esc(r.name)}">${REF_TAG_ICON}<span>${esc(r.name)}</span></span>`;
+              return `<span class="ref-chip ref-tag" title="Tag: ${esc(r.name)}">${REF_TAG_ICON}<span class="ref-chip-text">${esc(r.name)}</span></span>`;
             }
             const icon = r.type === 'remote' ? REF_REMOTE_ICON : r.type === 'head' ? REF_HEAD_ICON : '';
-            return `<span class="ref-chip ref-${esc(r.type)}" style="background:${laneColor}" title="${esc(r.name)}">${icon}<span>${esc(r.name)}</span></span>`;
+            return `<span class="ref-chip ref-${esc(r.type)}" style="background:${laneColor}" title="${esc(r.name)}">${icon}<span class="ref-chip-text">${esc(r.name)}</span></span>`;
           })
           .join('');
 

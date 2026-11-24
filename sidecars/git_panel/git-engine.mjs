@@ -737,12 +737,25 @@ function parseDecorations(raw) {
     const item = part.trim();
     if (!item) continue;
     if (item.startsWith('HEAD -> ')) {
-      refs.push({ name: item.slice('HEAD -> '.length), type: 'head', current: true });
+      const target = item.slice('HEAD -> '.length).replace(/^refs\/heads\//, '');
+      refs.push({ name: target, type: 'head', current: true });
     } else if (item === 'HEAD') {
       refs.push({ name: 'HEAD', type: 'head', current: true });
     } else if (item.startsWith('tag: ')) {
-      refs.push({ name: item.slice('tag: '.length), type: 'tag', current: false });
-    } else if (item.includes('/')) {
+      const name = item.slice('tag: '.length).replace(/^refs\/tags\//, '');
+      refs.push({ name, type: 'tag', current: false });
+    } else if (item.startsWith('refs/remotes/')) {
+      const name = item.slice('refs/remotes/'.length);
+      if (name.endsWith('/HEAD')) continue;
+      refs.push({ name, type: 'remote', current: false });
+    } else if (item.startsWith('refs/heads/')) {
+      refs.push({ name: item.slice('refs/heads/'.length), type: 'local', current: false });
+    } else if (item.startsWith('refs/tags/')) {
+      refs.push({ name: item.slice('refs/tags/'.length), type: 'tag', current: false });
+    } else if (item.startsWith('refs/')) {
+      continue;
+    } else if (item.startsWith('origin/')) {
+      if (item.endsWith('/HEAD')) continue;
       refs.push({ name: item, type: 'remote', current: false });
     } else {
       refs.push({ name: item, type: 'local', current: false });
@@ -874,6 +887,7 @@ export async function getGraph(
     `--max-count=${safeLimit + 1}`,
     `--skip=${safeSkip}`,
     '--topo-order',
+    '--decorate=full',
     '--format=%x1e%H%x1f%h%x1f%P%x1f%D%x1f%an%x1f%ae%x1f%at%x1f%ar%x1f%s',
   ];
   if (allBranches) args.push('--branches', '--tags', '--remotes');
