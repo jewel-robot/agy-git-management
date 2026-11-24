@@ -1,0 +1,17 @@
+# Dependencies & logs
+node_modules/
+*.log
+*.zip
+
+# Local config & secrets
+/.claude/
+/.codex/
+/.agents/
+/.aws/
+.env
+.env.*
+!.env.example
+
+# OS / editor temp files
+.DS_Store
+*~

@@ -1,0 +1,21 @@
+{
+  "command": "node",
+  "args": ["main.mjs"],
+  "restart_policy": "always",
+  "display_name": "Git Management",
+  "description": "Source Control panel: staging, hunk diffs, commits & amend, SVG commit graph, branches, worktrees, stash, sync, and GitHub PR/Issues.",
+  "has_web_ui": true,
+  "agent_permissions": {
+    "allows_user_interactions": false
+  },
+  "ui_config": {
+    "display_name": "Git Management",
+    "views": [
+      {
+        "path": "/",
+        "entrypoint": "SIDECAR_UI_ENTRYPOINT_AUX_PANE",
+        "title": "Git"
+      }
+    ]
+  }
+}

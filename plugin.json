@@ -1,0 +1,16 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "git-management",
+  "displayName": "Git Management",
+  "version": "0.0.1",
+  "description": "VS Code-style Source Control sidecar panel for Antigravity: staging, hunk diffs, commits & amend, multi-color SVG commit graph, branches & worktrees, stash, sync, and GitHub PR/Issues.",
+  "author": "jewel-robot",
+  "homepage": "https://github.com/jewel-robot/agy-git-management",
+  "repository": "https://github.com/jewel-robot/agy-git-management",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "Open the Git Management panel for this workspace",
+    "Show current Git status and commit graph",
+    "Review uncommitted diffs and branch sync status"
+  ]
+}
