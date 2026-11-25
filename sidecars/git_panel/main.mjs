@@ -25,6 +25,7 @@ import {
   getStashDiff,
   getStashes,
   getStatus,
+  invalidateRepoDiscoveryCache,
   mergeBranch,
   removeWorktree,
   resolveAllowedRepo,
@@ -115,7 +116,7 @@ function handle(fn) {
 app.api(
   '/api/repos',
   handle(async (_data, ws) => {
-    const repos = await discoverRepos(ws);
+    const repos = await discoverRepos(ws, { bypassCache: true });
     return { repos };
   }),
   'GET'
@@ -124,13 +125,24 @@ app.api(
 app.api(
   '/api/status',
   handle(async (data, ws) => {
-    const repos = await discoverRepos(ws);
+    const bypassCache = data.force === '1' || data.force === 'true' || data.force === true;
+    const repos = await discoverRepos(ws, { bypassCache });
     if (!repos.length) {
       return { found: false, repos: [] };
     }
-    const repo = await resolveAllowedRepo(data.repo, ws, { fallbackToFirst: true });
+    const repo = await resolveAllowedRepo(data.repo, ws, {
+      fallbackToFirst: true,
+      prediscoveredRepos: repos,
+    });
     const [status, stashes] = await Promise.all([getStatus(repo), getStashes(repo)]);
-    const etag = `${repo}|${status.signature}|stashes:${stashes.length}`;
+    // Keep active repo's branch label fresh in dropdown even during discovery TTL cache
+    const activeEntry = repos.find((r) => r.path === repo);
+    if (activeEntry && status.branch) {
+      activeEntry.branch = status.branch;
+    }
+    const stashSig = stashes.map((s) => `${s.ref}:${s.hash}`).join(',');
+    const reposSig = repos.map((r) => `${r.path}:${r.branch}`).join(',');
+    const etag = `${repo}|${status.signature}|stashes:${stashSig}|repos:${reposSig}`;
     if (data.etag && data.etag === etag) {
       return { found: true, unchanged: true, etag, repo, repos };
     }
@@ -192,6 +204,10 @@ app.api(
   handle(async (data, ws) => {
     const repo = await resolveAllowedRepo(data.repo, ws, { fallbackToFirst: true });
     const commit = await getCommitDetail(repo, data.hash);
+    commit.files = (commit.files || []).map((f) => ({
+      ...f,
+      fileUri: pathToFileURL(join(repo, f.path)).href,
+    }));
     return { commit };
   }),
   'GET'
@@ -257,7 +273,7 @@ app.api(
 app.api(
   '/api/stage',
   handle(async (data, ws) => {
-    const repo = await resolveAllowedRepo(data.repo, ws);
+    const repo = await resolveAllowedRepo(data.repo, ws, { bypassCache: true });
     return stageFiles(repo, { paths: data.paths, all: Boolean(data.all) });
   })
 );
@@ -265,7 +281,7 @@ app.api(
 app.api(
   '/api/unstage',
   handle(async (data, ws) => {
-    const repo = await resolveAllowedRepo(data.repo, ws);
+    const repo = await resolveAllowedRepo(data.repo, ws, { bypassCache: true });
     return unstageFiles(repo, { paths: data.paths, all: Boolean(data.all) });
   })
 );
@@ -273,7 +289,7 @@ app.api(
 app.api(
   '/api/discard',
   handle(async (data, ws) => {
-    const repo = await resolveAllowedRepo(data.repo, ws);
+    const repo = await resolveAllowedRepo(data.repo, ws, { bypassCache: true });
     return discardFiles(repo, { items: data.items, all: Boolean(data.all) });
   })
 );
@@ -281,7 +297,7 @@ app.api(
 app.api(
   '/api/hunk',
   handle(async (data, ws) => {
-    const repo = await resolveAllowedRepo(data.repo, ws);
+    const repo = await resolveAllowedRepo(data.repo, ws, { bypassCache: true });
     return applyHunk(repo, { patch: data.patch, action: data.action });
   })
 );
@@ -289,7 +305,7 @@ app.api(
 app.api(
   '/api/commit',
   handle(async (data, ws) => {
-    const repo = await resolveAllowedRepo(data.repo, ws);
+    const repo = await resolveAllowedRepo(data.repo, ws, { bypassCache: true });
     return commitChanges(repo, {
       message: data.message,
       amend: Boolean(data.amend),
@@ -301,35 +317,41 @@ app.api(
 app.api(
   '/api/branch/checkout',
   handle(async (data, ws) => {
-    const repo = await resolveAllowedRepo(data.repo, ws);
-    return checkoutBranch(repo, { name: data.name, isRemote: Boolean(data.isRemote) });
+    const repo = await resolveAllowedRepo(data.repo, ws, { bypassCache: true });
+    const res = await checkoutBranch(repo, { name: data.name, isRemote: Boolean(data.isRemote) });
+    invalidateRepoDiscoveryCache();
+    return res;
   })
 );
 
 app.api(
   '/api/branch/create',
   handle(async (data, ws) => {
-    const repo = await resolveAllowedRepo(data.repo, ws);
-    return createBranch(repo, {
+    const repo = await resolveAllowedRepo(data.repo, ws, { bypassCache: true });
+    const res = await createBranch(repo, {
       name: data.name,
       startPoint: data.startPoint || '',
       checkout: data.checkout !== false,
     });
+    invalidateRepoDiscoveryCache();
+    return res;
   })
 );
 
 app.api(
   '/api/branch/delete',
   handle(async (data, ws) => {
-    const repo = await resolveAllowedRepo(data.repo, ws);
-    return deleteBranch(repo, { name: data.name, force: Boolean(data.force) });
+    const repo = await resolveAllowedRepo(data.repo, ws, { bypassCache: true });
+    const res = await deleteBranch(repo, { name: data.name, force: Boolean(data.force) });
+    invalidateRepoDiscoveryCache();
+    return res;
   })
 );
 
 app.api(
   '/api/branch/merge',
   handle(async (data, ws) => {
-    const repo = await resolveAllowedRepo(data.repo, ws);
+    const repo = await resolveAllowedRepo(data.repo, ws, { bypassCache: true });
     return mergeBranch(repo, { name: data.name });
   })
 );
@@ -337,7 +359,7 @@ app.api(
 app.api(
   '/api/sync',
   handle(async (data, ws) => {
-    const repo = await resolveAllowedRepo(data.repo, ws);
+    const repo = await resolveAllowedRepo(data.repo, ws, { bypassCache: true });
     return syncRemote(repo, { action: data.action });
   })
 );
@@ -345,28 +367,32 @@ app.api(
 app.api(
   '/api/worktree/add',
   handle(async (data, ws) => {
-    const repo = await resolveAllowedRepo(data.repo, ws);
-    return addWorktree(repo, {
+    const repo = await resolveAllowedRepo(data.repo, ws, { bypassCache: true });
+    const res = await addWorktree(repo, {
       path: data.path,
       branch: data.branch,
       newBranch: Boolean(data.newBranch),
       startPoint: data.startPoint || '',
     });
+    invalidateRepoDiscoveryCache();
+    return res;
   })
 );
 
 app.api(
   '/api/worktree/remove',
   handle(async (data, ws) => {
-    const repo = await resolveAllowedRepo(data.repo, ws);
-    return removeWorktree(repo, { path: data.path, force: Boolean(data.force) });
+    const repo = await resolveAllowedRepo(data.repo, ws, { bypassCache: true });
+    const res = await removeWorktree(repo, { path: data.path, force: Boolean(data.force) });
+    invalidateRepoDiscoveryCache();
+    return res;
   })
 );
 
 app.api(
   '/api/stash/save',
   handle(async (data, ws) => {
-    const repo = await resolveAllowedRepo(data.repo, ws);
+    const repo = await resolveAllowedRepo(data.repo, ws, { bypassCache: true });
     return stashSave(repo, {
       message: data.message || '',
       includeUntracked: data.includeUntracked !== false,
@@ -377,7 +403,7 @@ app.api(
 app.api(
   '/api/stash/action',
   handle(async (data, ws) => {
-    const repo = await resolveAllowedRepo(data.repo, ws);
+    const repo = await resolveAllowedRepo(data.repo, ws, { bypassCache: true });
     return stashAction(repo, { ref: data.ref, action: data.action });
   })
 );
@@ -398,7 +424,7 @@ app.api(
 app.api(
   '/api/github/pr',
   handle(async (data, ws) => {
-    const repo = await resolveAllowedRepo(data.repo, ws);
+    const repo = await resolveAllowedRepo(data.repo, ws, { bypassCache: true });
     return createGitHubPull(repo, {
       title: data.title,
       body: data.body || '',

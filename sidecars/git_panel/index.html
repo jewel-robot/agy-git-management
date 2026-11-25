@@ -5,10 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Git Management</title>
   <script src="/preload.js"></script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" media="print" onload="this.media='all'" href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:ROND,opsz,slnt,wdth,wght@0..100,6..144,-10..0,92..100,100..1000&family=Google+Sans+Code:ital,wght@0,300..800;1,300..800&display=swap">
-  <link rel="stylesheet" href="/styles.css?v=0.0.1-2">
+  <link rel="stylesheet" media="print" onload="this.media='all'" onerror="this.remove()" href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:ROND,opsz,slnt,wdth,wght@0..100,6..144,-10..0,92..100,100..1000&family=Google+Sans+Code:ital,wght@0,300..800;1,300..800&display=swap">
+  <link rel="stylesheet" href="/styles.css?v=0.0.1-3">
 </head>
 <body>
   <div id="app" class="app">
@@ -32,9 +30,11 @@
           </button>
           <button type="button" class="icon-btn" id="btn-pull" title="Pull from upstream">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5v9"/><path d="M4.5 8.5 8 12l3.5-3.5"/><path d="M3 13.5h10"/></svg>
+            <span id="pull-badge" class="sync-badge num hidden"></span>
           </button>
           <button type="button" class="icon-btn" id="btn-push" title="Push to remote">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12V3"/><path d="M4.5 6.5 8 3l3.5 3.5"/><path d="M3 13.5h10"/></svg>
+            <span id="push-badge" class="sync-badge num hidden"></span>
           </button>
           <button type="button" class="icon-btn" id="btn-refresh" title="Refresh status">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8a5.5 5.5 0 0 1 9.5-3.75L13.5 5.5"/><path d="M13.5 2.5v3h-3"/><path d="M13.5 8a5.5 5.5 0 0 1-9.5 3.75L2.5 10.5"/><path d="M2.5 13.5v-3h3"/></svg>
@@ -70,74 +70,84 @@
     <!-- Main Scrollable Content -->
     <main id="content" class="content">
       <!-- TAB 1: CHANGES -->
-      <section id="view-changes" class="tab-view active">
-        <div class="commit-box">
-          <textarea id="commit-msg" class="commit-input" rows="2" placeholder="Commit message (Ctrl+Enter to commit)"></textarea>
-          <div class="commit-bar">
-            <label class="check-label" title="Amend the previous commit">
-              <input type="checkbox" id="chk-amend">
-              <span>Amend</span>
-            </label>
-            <div class="commit-btns">
-              <button type="button" class="btn btn-ghost btn-sm" id="btn-stage-commit" title="Stage all changes and commit">Stage &amp; Commit</button>
-              <button type="button" class="btn btn-primary btn-sm" id="btn-commit">Commit</button>
+      <section id="view-changes" class="tab-view split-tab-view active">
+        <div class="split-top">
+          <div id="changes-scroll" class="split-scroll">
+            <div class="commit-box">
+              <textarea id="commit-msg" class="commit-input" rows="2" placeholder="Commit message (Ctrl+Enter to commit)"></textarea>
+              <div class="commit-bar">
+                <label class="check-label" title="Amend the previous commit">
+                  <input type="checkbox" id="chk-amend">
+                  <span>Amend</span>
+                </label>
+                <div class="commit-btns">
+                  <button type="button" class="btn btn-ghost btn-sm" id="btn-stage-commit" title="Stage all changes and commit">Stage &amp; Commit</button>
+                  <button type="button" class="btn btn-primary btn-sm" id="btn-commit">Commit</button>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
 
-        <div class="scm-toolbar">
-          <div class="segmented">
-            <button type="button" id="btn-view-flat" class="seg-btn on" title="Flat file list">Flat</button>
-            <button type="button" id="btn-view-tree" class="seg-btn" title="Directory tree">Tree</button>
-          </div>
-          <div class="scm-toolbar-right">
-            <button type="button" class="btn btn-ghost btn-xs" id="btn-stage-all" title="Stage all changes">Stage All</button>
-            <button type="button" class="btn btn-ghost btn-xs" id="btn-unstage-all" title="Unstage all changes">Unstage All</button>
-            <button type="button" class="btn btn-ghost btn-xs" id="btn-stash-toggle" title="Create a new stash">+ Stash</button>
-          </div>
-        </div>
-
-        <!-- Inline Stash Form -->
-        <div id="stash-form" class="inline-form hidden">
-          <input type="text" id="stash-msg" class="input" placeholder="Optional stash message...">
-          <div class="inline-form-row">
-            <label class="check-label"><input type="checkbox" id="stash-untracked" checked><span>Include untracked</span></label>
-            <div class="inline-form-btns">
-              <button type="button" class="btn btn-ghost btn-xs" id="btn-stash-cancel">Cancel</button>
-              <button type="button" class="btn btn-primary btn-xs" id="btn-stash-save">Save Stash</button>
+            <div class="scm-toolbar">
+              <div class="segmented">
+                <button type="button" id="btn-view-flat" class="seg-btn on" title="Flat file list">Flat</button>
+                <button type="button" id="btn-view-tree" class="seg-btn" title="Directory tree">Tree</button>
+              </div>
+              <div class="scm-toolbar-right">
+                <button type="button" class="btn btn-ghost btn-xs" id="btn-stage-all" title="Stage all changes">Stage All</button>
+                <button type="button" class="btn btn-ghost btn-xs" id="btn-unstage-all" title="Unstage all changes">Unstage All</button>
+                <button type="button" class="btn btn-ghost btn-xs" id="btn-stash-toggle" title="Create a new stash">+ Stash</button>
+              </div>
             </div>
+
+            <!-- Inline Stash Form -->
+            <div id="stash-form" class="inline-form hidden">
+              <input type="text" id="stash-msg" class="input" placeholder="Optional stash message (Enter to save)...">
+              <div class="inline-form-row">
+                <label class="check-label"><input type="checkbox" id="stash-untracked" checked><span>Include untracked</span></label>
+                <div class="inline-form-btns">
+                  <button type="button" class="btn btn-ghost btn-xs" id="btn-stash-cancel">Cancel</button>
+                  <button type="button" class="btn btn-primary btn-xs" id="btn-stash-save">Save Stash</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- File Groups -->
+            <div id="changes-lists" class="changes-lists"></div>
+
+            <!-- Stashes Collapsible Section -->
+            <details id="stashes-section" class="acc-section">
+              <summary class="acc-summary">
+                <span class="acc-title">Stashes</span>
+                <span id="stashes-count" class="count-pill num">0</span>
+              </summary>
+              <div id="stashes-list" class="acc-body"></div>
+            </details>
           </div>
         </div>
 
-        <!-- File Groups -->
-        <div id="changes-lists" class="changes-lists"></div>
+        <div id="changes-resizer" class="split-resizer hidden" role="separator" aria-orientation="horizontal" title="Drag to resize · Double-click to reset"></div>
 
-        <!-- Inline Diff Drawer -->
-        <div id="diff-pane" class="diff-pane hidden">
+        <!-- Docked Diff / Stash Preview Drawer -->
+        <div id="diff-pane" class="diff-pane docked-drawer hidden">
           <div class="diff-head">
             <div class="diff-title-wrap">
               <span id="diff-scope-tag" class="diff-scope-tag"></span>
               <span id="diff-file-path" class="diff-file-path mono"></span>
             </div>
             <div class="diff-head-actions">
+              <div id="diff-extra-actions" class="diff-extra-actions"></div>
               <div class="segmented">
                 <button type="button" id="btn-diff-unified" class="seg-btn on">Unified</button>
                 <button type="button" id="btn-diff-split" class="seg-btn">Split</button>
               </div>
-              <button type="button" class="icon-btn" id="btn-diff-close" title="Close diff">&times;</button>
+              <button type="button" class="icon-btn icon-btn-sm" id="btn-diff-max" data-toggle-max="changes" title="Maximize drawer">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.5H2.5V6M10 2.5h3.5V6M13.5 10v3.5H10M2.5 10v3.5H6"/></svg>
+              </button>
+              <button type="button" class="icon-btn icon-btn-sm" id="btn-diff-close" title="Close diff (Esc)">&times;</button>
             </div>
           </div>
           <div id="diff-body" class="diff-body"></div>
         </div>
-
-        <!-- Stashes Collapsible Section -->
-        <details id="stashes-section" class="acc-section">
-          <summary class="acc-summary">
-            <span class="acc-title">Stashes</span>
-            <span id="stashes-count" class="count-pill num">0</span>
-          </summary>
-          <div id="stashes-list" class="acc-body"></div>
-        </details>
       </section>
 
       <!-- TAB 2: GRAPH -->
@@ -156,13 +166,14 @@
               <button type="button" class="btn btn-primary btn-xs" id="btn-graph-apply">Apply</button>
             </div>
           </div>
-          <div class="split-scroll">
+          <div id="graph-scroll" class="split-scroll">
             <div id="graph-list" class="graph-list"></div>
             <div id="graph-more-wrap" class="more-wrap hidden">
               <button type="button" class="btn btn-ghost btn-sm" id="btn-graph-more">Load more commits</button>
             </div>
           </div>
         </div>
+        <div id="graph-resizer" class="split-resizer hidden" role="separator" aria-orientation="horizontal" title="Drag to resize · Double-click to reset"></div>
         <!-- Docked Commit Detail & Diff Drawer -->
         <div id="commit-detail" class="commit-detail docked-drawer hidden"></div>
       </section>
@@ -219,60 +230,66 @@
       </section>
 
       <!-- TAB 4: GITHUB -->
-      <section id="view-github" class="tab-view hidden">
-        <div class="gh-header">
-          <div id="gh-repo-meta" class="gh-repo-meta">Detecting GitHub remote...</div>
-          <div class="gh-header-actions">
-            <button type="button" class="btn btn-ghost btn-xs" id="btn-gh-token-toggle" title="Configure GitHub Personal Access Token">Token</button>
-            <button type="button" class="btn btn-primary btn-xs" id="btn-gh-pr-toggle">+ New PR</button>
-          </div>
-        </div>
-
-        <!-- Token Form -->
-        <div id="gh-token-form" class="inline-form hidden">
-          <div id="gh-token-status" class="muted-note"></div>
-          <input type="password" id="gh-token-input" class="input input-sm" placeholder="ghp_... (stored locally with 0600 permissions)">
-          <div class="inline-form-row">
-            <span class="muted-note">Used for private repos &amp; creating PRs</span>
-            <div class="inline-form-btns">
-              <button type="button" class="btn btn-ghost btn-xs" id="btn-gh-token-clear">Clear</button>
-              <button type="button" class="btn btn-primary btn-xs" id="btn-gh-token-save">Save</button>
+      <section id="view-github" class="tab-view split-tab-view hidden">
+        <div class="split-top">
+          <div class="gh-header">
+            <div id="gh-repo-meta" class="gh-repo-meta">Detecting GitHub remote...</div>
+            <div class="gh-header-actions">
+              <button type="button" class="btn btn-ghost btn-xs" id="btn-gh-token-toggle" title="Configure GitHub Personal Access Token">Token</button>
+              <button type="button" class="btn btn-primary btn-xs" id="btn-gh-pr-toggle">+ New PR</button>
             </div>
           </div>
-        </div>
 
-        <!-- Create PR Form -->
-        <div id="gh-pr-form" class="inline-form hidden">
-          <input type="text" id="gh-pr-title" class="input input-sm" placeholder="Pull request title">
-          <div class="pr-branch-row">
-            <input type="text" id="gh-pr-head" class="input input-sm" placeholder="Head branch">
-            <span class="pr-arrow">&rarr;</span>
-            <input type="text" id="gh-pr-base" class="input input-sm" placeholder="Base branch (e.g. main)">
-          </div>
-          <textarea id="gh-pr-body" class="commit-input" rows="3" placeholder="Description..."></textarea>
-          <div class="inline-form-row">
-            <label class="check-label"><input type="checkbox" id="gh-pr-draft"><span>Draft PR</span></label>
-            <div class="inline-form-btns">
-              <button type="button" class="btn btn-ghost btn-xs" id="btn-gh-pr-cancel">Cancel</button>
-              <button type="button" class="btn btn-primary btn-xs" id="btn-gh-pr-submit">Create PR</button>
+          <div class="gh-controls">
+            <div class="segmented">
+              <button type="button" id="btn-gh-sub-prs" class="seg-btn on">PRs <span id="gh-pr-count" class="num">0</span></button>
+              <button type="button" id="btn-gh-sub-issues" class="seg-btn">Issues <span id="gh-issue-count" class="num">0</span></button>
+            </div>
+            <div class="segmented" id="gh-state-seg" role="group" aria-label="Filter state">
+              <button type="button" class="seg-btn on" data-gh-state="open">Open</button>
+              <button type="button" class="seg-btn" data-gh-state="closed">Closed</button>
+              <button type="button" class="seg-btn" data-gh-state="all">All</button>
             </div>
           </div>
+
+          <div id="gh-scroll" class="split-scroll">
+            <!-- Token Form -->
+            <div id="gh-token-form" class="inline-form hidden">
+              <div id="gh-token-status" class="muted-note"></div>
+              <input type="password" id="gh-token-input" class="input input-sm" placeholder="ghp_... (stored locally with 0600 permissions)">
+              <div class="inline-form-row">
+                <span class="muted-note">Used for private repos &amp; creating PRs</span>
+                <div class="inline-form-btns">
+                  <button type="button" class="btn btn-ghost btn-xs" id="btn-gh-token-clear">Clear</button>
+                  <button type="button" class="btn btn-primary btn-xs" id="btn-gh-token-save">Save</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Create PR Form -->
+            <div id="gh-pr-form" class="inline-form hidden">
+              <input type="text" id="gh-pr-title" class="input input-sm" placeholder="Pull request title">
+              <div class="pr-branch-row">
+                <input type="text" id="gh-pr-head" class="input input-sm" placeholder="Head branch">
+                <span class="pr-arrow">&rarr;</span>
+                <input type="text" id="gh-pr-base" class="input input-sm" placeholder="Base branch (e.g. main)">
+              </div>
+              <textarea id="gh-pr-body" class="commit-input" rows="3" placeholder="Description (Ctrl+Enter to create)..."></textarea>
+              <div class="inline-form-row">
+                <label class="check-label"><input type="checkbox" id="gh-pr-draft"><span>Draft PR</span></label>
+                <div class="inline-form-btns">
+                  <button type="button" class="btn btn-ghost btn-xs" id="btn-gh-pr-cancel">Cancel</button>
+                  <button type="button" class="btn btn-primary btn-xs" id="btn-gh-pr-submit">Create PR</button>
+                </div>
+              </div>
+            </div>
+
+            <div id="gh-list" class="gh-list"></div>
+          </div>
         </div>
 
-        <div class="gh-controls">
-          <div class="segmented">
-            <button type="button" id="btn-gh-sub-prs" class="seg-btn on">PRs <span id="gh-pr-count" class="num">0</span></button>
-            <button type="button" id="btn-gh-sub-issues" class="seg-btn">Issues <span id="gh-issue-count" class="num">0</span></button>
-          </div>
-          <div class="segmented" id="gh-state-seg" role="group" aria-label="Filter state">
-            <button type="button" class="seg-btn on" data-gh-state="open">Open</button>
-            <button type="button" class="seg-btn" data-gh-state="closed">Closed</button>
-            <button type="button" class="seg-btn" data-gh-state="all">All</button>
-          </div>
-        </div>
-
-        <div id="gh-list" class="gh-list"></div>
-        <div id="gh-detail" class="commit-detail hidden"></div>
+        <div id="gh-resizer" class="split-resizer hidden" role="separator" aria-orientation="horizontal" title="Drag to resize · Double-click to reset"></div>
+        <div id="gh-detail" class="commit-detail docked-drawer hidden"></div>
       </section>
     </main>
   </div>
@@ -290,8 +307,14 @@
   </div>
 
   <!-- Toast -->
-  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite">
+    <div id="toast-text" class="toast-text"></div>
+    <div id="toast-actions" class="toast-actions hidden">
+      <button type="button" id="toast-copy" class="toast-btn" title="Copy message">Copy</button>
+      <button type="button" id="toast-close" class="toast-btn" title="Dismiss">&times;</button>
+    </div>
+  </div>
 
-  <script src="/app.js?v=0.0.1-2"></script>
+  <script src="/app.js?v=0.0.1-3"></script>
 </body>
 </html>

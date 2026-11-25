@@ -204,20 +204,35 @@ function walkForGitDirs(rootDir, maxDepth = 3) {
   return found;
 }
 
-export async function discoverRepos(workspacePaths) {
-  const seen = new Map();
-  const validRoots = [];
+const REPO_CACHE_TTL_MS = 5000;
+const repoDiscoveryCache = new Map();
 
-  for (const raw of workspacePaths || []) {
+export function invalidateRepoDiscoveryCache() {
+  repoDiscoveryCache.clear();
+}
+
+export async function discoverRepos(workspacePaths, { bypassCache = false } = {}) {
+  const normalizedWs = Array.isArray(workspacePaths) ? workspacePaths.filter(Boolean) : [];
+  const cacheKey = normalizedWs.slice().sort().join('|');
+  const now = Date.now();
+  if (!bypassCache && cacheKey) {
+    const cached = repoDiscoveryCache.get(cacheKey);
+    if (cached && now - cached.ts < REPO_CACHE_TTL_MS) {
+      return cached.repos.map((r) => ({ ...r }));
+    }
+  }
+
+  const seen = new Map();
+
+  for (const raw of normalizedWs) {
     const p = raw.startsWith('file://') ? uriToPath(raw) : raw;
     if (!p || !existsSync(p)) continue;
     const real = safeRealpath(p);
-    validRoots.push(real);
 
     // Check if the workspace root itself is inside a git repository
     const top = await getGitToplevel(real);
     if (top && !seen.has(top)) {
-      seen.set(top, { path: top, root: real });
+      seen.set(top, { path: top, root: real, linkedWorktree: false, parentName: '' });
     }
 
     // Also scan nested repos (up to depth 3)
@@ -225,40 +240,85 @@ export async function discoverRepos(workspacePaths) {
     for (const candidate of nested) {
       const cReal = safeRealpath(candidate);
       if (!seen.has(cReal)) {
-        seen.set(cReal, { path: cReal, root: real });
+        seen.set(cReal, { path: cReal, root: real, linkedWorktree: false, parentName: '' });
+      }
+    }
+  }
+
+  // Include registered linked worktrees of discovered repositories so UI can switch to them seamlessly
+  const primaryPaths = Array.from(seen.keys());
+  for (const repoPath of primaryPaths) {
+    const parentMeta = seen.get(repoPath);
+    const wts = await getWorktrees(repoPath).catch(() => []);
+    for (const w of wts) {
+      if (!w.path || !existsSync(w.path)) continue;
+      const wReal = safeRealpath(w.path);
+      if (!seen.has(wReal)) {
+        seen.set(wReal, {
+          path: wReal,
+          root: parentMeta.root,
+          linkedWorktree: true,
+          parentName: basename(repoPath),
+          wtBranch: w.branch || (w.detached ? `@${w.head}` : ''),
+        });
       }
     }
   }
 
   const repos = [];
   for (const [repoPath, meta] of seen.entries()) {
-    const branchRes = await runGit(repoPath, ['symbolic-ref', '--short', 'HEAD'], { allowFail: true, timeoutMs: 3000 });
-    let branch = branchRes.code === 0 ? branchRes.stdout.trim() : '';
+    let branch = meta.wtBranch || '';
     if (!branch) {
-      const shaRes = await runGit(repoPath, ['rev-parse', '--short', 'HEAD'], { allowFail: true, timeoutMs: 3000 });
-      branch = shaRes.code === 0 ? `@${shaRes.stdout.trim()}` : '(unborn)';
+      const branchRes = await runGit(repoPath, ['symbolic-ref', '--short', 'HEAD'], { allowFail: true, timeoutMs: 3000 });
+      branch = branchRes.code === 0 ? branchRes.stdout.trim() : '';
+      if (!branch) {
+        const shaRes = await runGit(repoPath, ['rev-parse', '--short', 'HEAD'], { allowFail: true, timeoutMs: 3000 });
+        branch = shaRes.code === 0 ? `@${shaRes.stdout.trim()}` : '(unborn)';
+      }
     }
-    let isWorktree = false;
-    try {
-      isWorktree = statSync(join(repoPath, '.git')).isFile();
-    } catch {}
+    let isWorktree = Boolean(meta.linkedWorktree);
+    if (!isWorktree) {
+      try {
+        isWorktree = statSync(join(repoPath, '.git')).isFile();
+      } catch {}
+    }
     const rel = relative(meta.root, repoPath);
-    const label = !rel || rel.startsWith('..') ? basename(repoPath) : `${basename(meta.root)}/${rel}`;
+    let label;
+    if (meta.linkedWorktree) {
+      label = `${meta.parentName} (${basename(repoPath)})`;
+    } else {
+      label = !rel || rel.startsWith('..') ? basename(repoPath) : `${basename(meta.root)}/${rel}`;
+    }
     repos.push({
       path: repoPath,
       name: basename(repoPath),
       label,
       branch,
       isWorktree,
+      linkedWorktree: Boolean(meta.linkedWorktree),
     });
   }
 
-  repos.sort((a, b) => a.label.localeCompare(b.label));
+  // Primary workspace repositories always sort ahead of linked worktrees
+  repos.sort((a, b) => {
+    if (a.linkedWorktree !== b.linkedWorktree) return a.linkedWorktree ? 1 : -1;
+    return a.label.localeCompare(b.label);
+  });
+
+  if (cacheKey) {
+    repoDiscoveryCache.set(cacheKey, { ts: now, repos: repos.map((r) => ({ ...r })) });
+  }
   return repos;
 }
 
-export async function resolveAllowedRepo(requestedRepo, workspacePaths, { fallbackToFirst = false } = {}) {
-  const repos = await discoverRepos(workspacePaths);
+export async function resolveAllowedRepo(
+  requestedRepo,
+  workspacePaths,
+  { fallbackToFirst = false, prediscoveredRepos = null, bypassCache = false } = {}
+) {
+  const repos = Array.isArray(prediscoveredRepos)
+    ? prediscoveredRepos
+    : await discoverRepos(workspacePaths, { bypassCache });
   if (!requestedRepo) {
     return repos[0]?.path || null;
   }
@@ -266,8 +326,9 @@ export async function resolveAllowedRepo(requestedRepo, workspacePaths, { fallba
   if (repos.some((r) => r.path === reqReal)) {
     return reqReal;
   }
-  // Also allow registered worktrees of any discovered repo
+  // Fallback: verify against fresh worktree list of any discovered repo
   for (const r of repos) {
+    if (r.linkedWorktree) continue;
     const wt = await getWorktrees(r.path).catch(() => []);
     if (wt.some((w) => safeRealpath(w.path) === reqReal)) {
       return reqReal;
@@ -449,6 +510,15 @@ export async function getStatus(repo) {
 // Diff & Hunk Parsing
 // ---------------------------------------------------------------------------
 
+function cleanDiffPath(raw) {
+  if (!raw) return '';
+  let s = raw.trim();
+  if (s === '/dev/null') return '';
+  if (s.startsWith('"') && s.endsWith('"')) s = s.slice(1, -1);
+  if (s.startsWith('a/') || s.startsWith('b/')) s = s.slice(2);
+  return s;
+}
+
 export function parseUnifiedDiff(rawDiff) {
   if (!rawDiff || !rawDiff.trim()) {
     return { binary: false, files: [], hunks: [], raw: '' };
@@ -473,10 +543,13 @@ export function parseUnifiedDiff(rawDiff) {
 
     if (line.startsWith('diff --git ')) {
       flushHunk();
+      const dm = line.match(/^diff --git a\/(.+) b\/(.+)$/);
       currentFile = {
         headerLines: [line],
-        oldPath: '',
-        newPath: '',
+        oldPath: dm ? `a/${dm[1]}` : '',
+        newPath: dm ? `b/${dm[2]}` : '',
+        renameFrom: '',
+        renameTo: '',
         binary: false,
         hunks: [],
       };
@@ -485,7 +558,7 @@ export function parseUnifiedDiff(rawDiff) {
     }
 
     if (!currentFile) {
-      currentFile = { headerLines: [], oldPath: '', newPath: '', binary: false, hunks: [] };
+      currentFile = { headerLines: [], oldPath: '', newPath: '', renameFrom: '', renameTo: '', binary: false, hunks: [] };
       files.push(currentFile);
     }
 
@@ -507,6 +580,8 @@ export function parseUnifiedDiff(rawDiff) {
         currentFile.headerLines.push(line);
         if (line.startsWith('--- ')) currentFile.oldPath = line.slice(4);
         if (line.startsWith('+++ ')) currentFile.newPath = line.slice(4);
+        if (line.startsWith('rename from ')) currentFile.renameFrom = line.slice('rename from '.length).trim();
+        if (line.startsWith('rename to ')) currentFile.renameTo = line.slice('rename to '.length).trim();
         if (line.startsWith('Binary files ') || line === 'GIT binary patch') {
           currentFile.binary = true;
         }
@@ -565,15 +640,41 @@ export function parseUnifiedDiff(rawDiff) {
   }
   flushHunk();
 
-  // Build self-contained apply-ready patch per hunk
+  // Build self-contained apply-ready patch per hunk + normalized file metadata
   for (const f of files) {
     const patchHeader = f.headerLines.join('\n');
+    let additions = 0;
+    let deletions = 0;
     for (const h of f.hunks) {
+      for (const l of h.lines) {
+        if (l.type === 'add') additions++;
+        else if (l.type === 'del') deletions++;
+      }
       h.patch = `${patchHeader}\n${h.rawLines.join('\n')}\n`;
       delete h.rawLines;
       delete h.oldCursor;
       delete h.newCursor;
     }
+    const cleanOld = cleanDiffPath(f.renameFrom || f.oldPath);
+    const cleanNew = cleanDiffPath(f.renameTo || f.newPath);
+    const isAdded =
+      f.oldPath.trim() === '/dev/null' ||
+      f.headerLines.some((l) => l.startsWith('new file mode ')) ||
+      (!cleanOld && Boolean(cleanNew));
+    const isDeleted =
+      f.newPath.trim() === '/dev/null' ||
+      f.headerLines.some((l) => l.startsWith('deleted file mode ')) ||
+      (Boolean(cleanOld) && !cleanNew);
+    const isRenamed =
+      Boolean(f.renameFrom && f.renameTo) ||
+      (!isAdded && !isDeleted && Boolean(cleanOld && cleanNew) && cleanOld !== cleanNew);
+    f.path = cleanNew || cleanOld;
+    f.origPath = isRenamed ? cleanOld : undefined;
+    f.status = isAdded ? 'A' : isDeleted ? 'D' : isRenamed ? 'R' : 'M';
+    f.additions = additions;
+    f.deletions = deletions;
+    delete f.renameFrom;
+    delete f.renameTo;
   }
 
   const first = files[0] || { binary: false, hunks: [] };
@@ -764,15 +865,10 @@ function parseDecorations(raw) {
   return refs;
 }
 
-function computeSwimlanes(commits) {
-  // activeLanes[col] = { hash, color } | null
+function computeMaxGraphCols(commits) {
   const activeLanes = [];
-  let nextColor = 0;
-  const PALETTE_SIZE = 8;
-
-  const allocColor = () => nextColor++ % PALETTE_SIZE;
   const findFreeCol = () => {
-    const idx = activeLanes.findIndex((l) => l === null);
+    const idx = activeLanes.findIndex((h) => h === null);
     if (idx !== -1) return idx;
     activeLanes.push(null);
     return activeLanes.length - 1;
@@ -784,94 +880,37 @@ function computeSwimlanes(commits) {
   };
 
   let maxCols = 1;
-
   for (const commit of commits) {
-    // Find all lanes currently expecting this commit hash
-    const matchingCols = [];
+    let col = -1;
     for (let i = 0; i < activeLanes.length; i++) {
-      if (activeLanes[i] && activeLanes[i].hash === commit.hash) {
-        matchingCols.push(i);
+      if (activeLanes[i] === commit.hash) {
+        if (col === -1) col = i;
+        else activeLanes[i] = null;
       }
     }
-
-    let col;
-    let color;
-    const incoming = [];
-
-    if (matchingCols.length > 0) {
-      col = matchingCols[0];
-      color = activeLanes[col].color;
-      // Collapse duplicate lanes pointing to this commit into `col`
-      for (const mc of matchingCols) {
-        incoming.push({ fromCol: mc, toCol: col, color: activeLanes[mc].color });
-        if (mc !== col) activeLanes[mc] = null;
-      }
-    } else {
+    if (col === -1) {
       col = findFreeCol();
-      color = allocColor();
-      activeLanes[col] = { hash: commit.hash, color };
+      activeLanes[col] = commit.hash;
     }
 
-    // Record lanes that simply pass straight through this row
-    const passThrough = [];
-    for (let i = 0; i < activeLanes.length; i++) {
-      if (i !== col && activeLanes[i] !== null) {
-        passThrough.push({ col: i, color: activeLanes[i].color });
-      }
-    }
-
-    // Now advance `col` to commit's parents
     const parents = commit.parents;
-    const outgoing = [];
-
     if (parents.length === 0) {
       activeLanes[col] = null;
     } else {
-      // First parent inherits `col` unless another lane already tracks it
       const p0 = parents[0];
-      const existingP0 = activeLanes.findIndex((l, i) => i !== col && l && l.hash === p0);
-      if (existingP0 !== -1) {
-        outgoing.push({ fromCol: col, toCol: existingP0, color });
-        activeLanes[col] = null;
-      } else {
-        activeLanes[col] = { hash: p0, color };
-        outgoing.push({ fromCol: col, toCol: col, color });
-      }
-
-      // Secondary parents (merge commit)
+      const existingP0 = activeLanes.findIndex((h, i) => i !== col && h === p0);
+      activeLanes[col] = existingP0 !== -1 ? null : p0;
       for (let pi = 1; pi < parents.length; pi++) {
         const p = parents[pi];
-        const existing = activeLanes.findIndex((l) => l && l.hash === p);
-        if (existing !== -1) {
-          outgoing.push({ fromCol: col, toCol: existing, color: activeLanes[existing].color });
-        } else {
-          const newCol = findFreeCol();
-          const newColor = allocColor();
-          activeLanes[newCol] = { hash: p, color: newColor };
-          outgoing.push({ fromCol: col, toCol: newCol, color: newColor });
+        if (!activeLanes.includes(p)) {
+          activeLanes[findFreeCol()] = p;
         }
       }
     }
 
     trimTrailingNulls();
-    const rowCols = Math.max(
-      col + 1,
-      activeLanes.length,
-      ...incoming.map((e) => Math.max(e.fromCol, e.toCol) + 1),
-      ...outgoing.map((e) => Math.max(e.fromCol, e.toCol) + 1),
-      ...passThrough.map((e) => e.col + 1)
-    );
-    if (rowCols > maxCols) maxCols = rowCols;
-
-    commit.graph = {
-      col,
-      color,
-      incoming,
-      outgoing,
-      passThrough,
-    };
+    maxCols = Math.max(maxCols, col + 1, activeLanes.length);
   }
-
   return maxCols;
 }
 
@@ -929,7 +968,7 @@ export async function getGraph(
     };
   });
 
-  const maxCols = computeSwimlanes(commits);
+  const maxCols = computeMaxGraphCols(commits);
   return { commits, hasMore, maxCols };
 }
 
@@ -1219,5 +1258,5 @@ export async function getStashDiff(repo, ref) {
   const safeRef = assertSafeStashRef(ref);
   const res = await runGit(repo, ['stash', 'show', '-p', '--include-untracked', safeRef], { allowFail: true });
   const parsed = parseUnifiedDiff(res.stdout);
-  return { ref: safeRef, files: parsed.files, raw: res.stdout };
+  return { ref: safeRef, files: parsed.files };
 }

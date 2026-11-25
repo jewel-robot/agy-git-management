@@ -12,6 +12,18 @@
   const POLL_ACTIVE_MS = 2200;
   const POLL_HIDDEN_MS = 8000;
 
+  function loadDrawerHeights() {
+    const defaults = { changes: 52, graph: 54, github: 52 };
+    try {
+      const raw = JSON.parse(localStorage.getItem('agy_git_drawer_h') || '{}');
+      for (const k of Object.keys(defaults)) {
+        const v = Number(raw?.[k]);
+        if (Number.isFinite(v) && v >= 22 && v <= 82) defaults[k] = v;
+      }
+    } catch {}
+    return defaults;
+  }
+
   const state = {
     workspaces: [],
     repos: [],
@@ -23,14 +35,20 @@
     viewMode: localStorage.getItem('agy_git_view') === 'tree' ? 'tree' : 'flat',
     diffMode: localStorage.getItem('agy_git_diff_mode') === 'split' ? 'split' : 'unified',
     collapsedGroups: new Set(),
-    selectedDiff: null, // { path, scope, data }
+    selectedDiff: null, // { kind: 'file', path, scope, fileUri, status, data } | { kind: 'stash', ref, message, data }
     graph: { commits: [], hasMore: false, maxCols: 1, skip: 0, loaded: false },
     selectedCommit: null,
     commitFileDiff: null,
     branches: null,
-    github: { data: null, subTab: 'prs', state: 'open', loaded: false },
+    github: { data: null, subTab: 'prs', state: 'open', loaded: false, loading: false },
+    selectedGitHub: null, // { kind, number }
+    drawerHeights: loadDrawerHeights(),
+    maximized: { changes: false, graph: false, github: false },
     timer: null,
     toastTimer: null,
+    toastHovered: false,
+    toastMsg: '',
+    toastIsError: false,
     modalResolve: null,
   };
 
@@ -87,14 +105,150 @@
       "'": '&#39;',
     }[c]));
 
+  const ICON_MAXIMIZE =
+    '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.5H2.5V6M10 2.5h3.5V6M13.5 10v3.5H10M2.5 10v3.5H6"/></svg>';
+  const ICON_RESTORE =
+    '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6H6V2.5M13.5 6H10V2.5M10 13.5V10h3.5M6 13.5V10H2.5"/></svg>';
+
+  const DRAWER_MAP = {
+    changes: { viewId: 'view-changes', resizerId: 'changes-resizer', drawerId: 'diff-pane', maxBtnId: 'btn-diff-max' },
+    graph: { viewId: 'view-graph', resizerId: 'graph-resizer', drawerId: 'commit-detail', maxBtnId: 'btn-graph-max' },
+    github: { viewId: 'view-github', resizerId: 'gh-resizer', drawerId: 'gh-detail', maxBtnId: 'btn-gh-max' },
+  };
+
+  function saveDrawerHeights() {
+    try {
+      localStorage.setItem('agy_git_drawer_h', JSON.stringify(state.drawerHeights));
+    } catch {}
+  }
+
+  function syncDrawerUi(tabKey) {
+    const cfg = DRAWER_MAP[tabKey];
+    if (!cfg) return;
+    const view = $(cfg.viewId);
+    const resizer = $(cfg.resizerId);
+    const drawer = $(cfg.drawerId);
+    if (!view || !resizer || !drawer) return;
+    const isOpen = !drawer.classList.contains('hidden');
+    if (!isOpen) {
+      state.maximized[tabKey] = false;
+      resizer.classList.add('hidden');
+      view.classList.remove('drawer-max');
+      return;
+    }
+    const isMax = Boolean(state.maximized[tabKey]);
+    resizer.classList.toggle('hidden', isMax);
+    view.classList.toggle('drawer-max', isMax);
+    drawer.style.setProperty('--drawer-h', `${state.drawerHeights[tabKey] || 52}%`);
+    const maxBtn = $(cfg.maxBtnId);
+    if (maxBtn) {
+      maxBtn.innerHTML = isMax ? ICON_RESTORE : ICON_MAXIMIZE;
+      maxBtn.title = isMax ? 'Restore split view (Esc)' : 'Maximize drawer';
+    }
+  }
+
+  function toggleDrawerMaximize(tabKey) {
+    if (!DRAWER_MAP[tabKey]) return;
+    state.maximized[tabKey] = !state.maximized[tabKey];
+    syncDrawerUi(tabKey);
+  }
+
+  function initSplitResizer(tabKey) {
+    const cfg = DRAWER_MAP[tabKey];
+    if (!cfg) return;
+    const view = $(cfg.viewId);
+    const resizer = $(cfg.resizerId);
+    const drawer = $(cfg.drawerId);
+    if (!view || !resizer || !drawer) return;
+
+    resizer.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      resizer.setPointerCapture(e.pointerId);
+      resizer.classList.add('dragging');
+      document.body.classList.add('is-resizing');
+
+      const onMove = (ev) => {
+        const rect = view.getBoundingClientRect();
+        if (rect.height <= 0) return;
+        const rawPct = ((rect.bottom - ev.clientY) / rect.height) * 100;
+        const clamped = Math.min(82, Math.max(22, Math.round(rawPct * 10) / 10));
+        state.drawerHeights[tabKey] = clamped;
+        drawer.style.setProperty('--drawer-h', `${clamped}%`);
+      };
+
+      const onUp = () => {
+        resizer.classList.remove('dragging');
+        document.body.classList.remove('is-resizing');
+        resizer.removeEventListener('pointermove', onMove);
+        resizer.removeEventListener('pointerup', onUp);
+        resizer.removeEventListener('pointercancel', onUp);
+        saveDrawerHeights();
+      };
+
+      resizer.addEventListener('pointermove', onMove);
+      resizer.addEventListener('pointerup', onUp);
+      resizer.addEventListener('pointercancel', onUp);
+    });
+
+    resizer.addEventListener('dblclick', () => {
+      state.drawerHeights[tabKey] = 52;
+      saveDrawerHeights();
+      syncDrawerUi(tabKey);
+    });
+  }
+
+  initSplitResizer('changes');
+  initSplitResizer('graph');
+  initSplitResizer('github');
+
+  function hideToast() {
+    clearTimeout(state.toastTimer);
+    state.toastTimer = null;
+    $('toast').classList.add('hidden');
+  }
+
+  function scheduleToastDismiss(delayMs) {
+    clearTimeout(state.toastTimer);
+    if (state.toastHovered) return;
+    state.toastTimer = setTimeout(hideToast, delayMs);
+  }
+
   function showToast(msg, isError = false) {
     const el = $('toast');
-    el.textContent = msg;
-    el.classList.toggle('error', Boolean(isError));
+    const textEl = $('toast-text');
+    const actionsEl = $('toast-actions');
+    const str = String(msg ?? '');
+    state.toastMsg = str;
+    state.toastIsError = Boolean(isError);
+    textEl.textContent = str;
+    el.classList.toggle('error', state.toastIsError);
+    actionsEl.classList.toggle('hidden', !state.toastIsError);
+    $('toast-copy').textContent = 'Copy';
     el.classList.remove('hidden');
-    clearTimeout(state.toastTimer);
-    state.toastTimer = setTimeout(() => el.classList.add('hidden'), isError ? 4200 : 2400);
+    scheduleToastDismiss(state.toastIsError ? 7000 : 2400);
   }
+
+  $('toast').addEventListener('mouseenter', () => {
+    state.toastHovered = true;
+    clearTimeout(state.toastTimer);
+  });
+  $('toast').addEventListener('mouseleave', () => {
+    state.toastHovered = false;
+    if (!$('toast').classList.contains('hidden')) {
+      scheduleToastDismiss(state.toastIsError ? 3200 : 1200);
+    }
+  });
+  $('toast-close').addEventListener('click', hideToast);
+  $('toast-copy').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(state.toastMsg || '');
+      $('toast-copy').textContent = 'Copied';
+      setTimeout(() => {
+        if ($('toast-copy')) $('toast-copy').textContent = 'Copy';
+      }, 1500);
+    } catch {}
+  });
 
   function confirmModal(title, body, confirmLabel = 'Confirm') {
     return new Promise((resolve) => {
@@ -103,6 +257,7 @@
       $('modal-confirm').textContent = confirmLabel;
       $('modal-backdrop').classList.remove('hidden');
       state.modalResolve = resolve;
+      requestAnimationFrame(() => $('modal-confirm').focus());
     });
   }
 
@@ -324,11 +479,13 @@
     menuEl.innerHTML = state.repos
       .map((r) => {
         const isAct = r.path === state.repo;
+        const wtTag = r.isWorktree ? '<span class="dd-wt-tag">wt</span>' : '';
         return `
           <button type="button" class="dd-item ${isAct ? 'active' : ''}" role="option" aria-selected="${isAct}" data-select-repo="${esc(r.path)}">
             <span class="dd-item-left">
               <svg class="dd-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-6.5"/></svg>
               <span class="dd-item-name" title="${esc(r.path)}">${esc(r.label)}</span>
+              ${wtTag}
             </span>
             <span class="dd-item-branch">${esc(r.branch)}</span>
           </button>`;
@@ -348,16 +505,37 @@
       op.classList.add('hidden');
     }
 
+    const ahead = st.ahead || 0;
+    const behind = st.behind || 0;
     const ab = $('ab-badge');
-    if (st.ahead > 0 || st.behind > 0) {
+    if (ahead > 0 || behind > 0) {
       const parts = [];
-      if (st.ahead > 0) parts.push(`↑${st.ahead}`);
-      if (st.behind > 0) parts.push(`↓${st.behind}`);
+      if (ahead > 0) parts.push(`↑${ahead}`);
+      if (behind > 0) parts.push(`↓${behind}`);
       ab.textContent = parts.join(' ');
       ab.classList.remove('hidden');
     } else {
       ab.classList.add('hidden');
     }
+
+    const pullBtn = $('btn-pull');
+    const pullBadge = $('pull-badge');
+    pullBtn.classList.toggle('has-pending', behind > 0);
+    pullBadge.textContent = behind > 99 ? '99+' : String(behind);
+    pullBadge.classList.toggle('hidden', behind <= 0);
+    pullBtn.title = behind > 0 ? `Pull ${behind} incoming commit${behind > 1 ? 's' : ''} from upstream` : 'Pull from upstream';
+
+    const pushBtn = $('btn-push');
+    const pushBadge = $('push-badge');
+    pushBtn.classList.toggle('has-pending', ahead > 0);
+    pushBadge.textContent = ahead > 99 ? '99+' : String(ahead);
+    pushBadge.classList.toggle('hidden', ahead <= 0);
+    pushBtn.title =
+      ahead > 0
+        ? `Push ${ahead} outgoing commit${ahead > 1 ? 's' : ''} to remote`
+        : !st.upstream && st.branch && st.branch !== '(detached)'
+          ? `Publish branch "${st.branch}" to origin`
+          : 'Push to remote';
 
     $('upstream-name').textContent = st.upstream ? `→ ${st.upstream}` : 'no upstream';
   }
@@ -381,7 +559,7 @@
   function renderFileRowHtml(f, groupScope, indentPx = 0) {
     const { base, dir } = splitPath(f.path);
     const isSelected =
-      state.selectedDiff &&
+      state.selectedDiff?.kind === 'file' &&
       state.selectedDiff.path === f.path &&
       state.selectedDiff.scope === groupScope;
     const statsHtml =
@@ -402,12 +580,17 @@
       actions.push(`<button type="button" class="mini-btn" data-act="open" data-uri="${esc(f.fileUri)}" title="Open file in Antigravity">&#x2197;</button>`);
     }
 
-    const dirDisplay = state.viewMode === 'flat' && dir ? `<span class="file-dir">${esc(dir)}</span>` : '';
+    const hasRename = Boolean(f.origPath && f.origPath !== f.path);
+    const subParts = [];
+    if (state.viewMode === 'flat' && dir) subParts.push(dir);
+    if (hasRename) subParts.push(`← ${f.origPath}`);
+    const dirDisplay = subParts.length ? `<span class="file-dir">${esc(subParts.join(' · '))}</span>` : '';
+    const rowTitle = hasRename ? `${f.origPath} → ${f.path}` : f.path;
     return `
-      <div class="file-row ${isSelected ? 'selected' : ''}" data-diff-path="${esc(f.path)}" data-diff-scope="${esc(groupScope)}" style="padding-left:${6 + indentPx}px">
+      <div class="file-row ${actions.length ? 'has-actions' : ''} ${isSelected ? 'selected' : ''}" data-diff-path="${esc(f.path)}" data-diff-scope="${esc(groupScope)}" style="padding-left:${6 + indentPx}px">
         <span class="file-icon">${getFileIconSvg(f.path)}</span>
         <div class="file-name-wrap">
-          <span class="file-base ${f.status === 'D' ? 'is-deleted' : ''}" title="${esc(f.path)}">${esc(base)}</span>
+          <span class="file-base ${f.status === 'D' ? 'is-deleted' : ''}" title="${esc(rowTitle)}">${esc(base)}</span>
           ${dirDisplay}
         </div>
         ${statsHtml}
@@ -462,6 +645,8 @@
   }
 
   function renderChanges(st) {
+    const scrollEl = $('changes-scroll');
+    const prevScrollTop = scrollEl ? scrollEl.scrollTop : 0;
     const wrap = $('changes-lists');
     if (!st.totalChanges) {
       wrap.innerHTML = `<div class="empty-state" style="padding:18px 8px"><div class="empty-title">Working tree clean</div><div class="empty-sub">No uncommitted changes on ${esc(st.branch)}.</div></div>`;
@@ -500,9 +685,10 @@
       sl.innerHTML = '<div class="muted-note" style="padding:4px 6px">No stashes saved.</div>';
     } else {
       sl.innerHTML = state.stashes
-        .map(
-          (s) => `
-          <div class="stash-row">
+        .map((s) => {
+          const isSelected = state.selectedDiff?.kind === 'stash' && state.selectedDiff.ref === s.ref;
+          return `
+          <div class="stash-row ${isSelected ? 'selected' : ''}" data-stash-preview="${esc(s.ref)}" data-stash-msg="${esc(s.message)}" title="Click to preview stash diff">
             <div class="stash-meta">
               <div class="stash-msg" title="${esc(s.message)}">${esc(s.message)}</div>
               <div class="stash-sub mono">${esc(s.ref)} · ${esc(s.relDate)}</div>
@@ -512,13 +698,14 @@
               <button type="button" class="btn btn-ghost btn-xs" data-stash-act="pop" data-ref="${esc(s.ref)}">Pop</button>
               <button type="button" class="btn btn-ghost btn-xs" data-stash-act="drop" data-ref="${esc(s.ref)}" style="color:var(--c-del)">Drop</button>
             </div>
-          </div>`
-        )
+          </div>`;
+        })
         .join('');
     }
 
     $('btn-view-flat').classList.toggle('on', state.viewMode === 'flat');
     $('btn-view-tree').classList.toggle('on', state.viewMode === 'tree');
+    if (scrollEl) scrollEl.scrollTop = prevScrollTop;
   }
 
   // ---------- Lightweight Syntax Highlighter ----------
@@ -787,28 +974,152 @@
       .join('');
   }
 
-  function renderDiffPane() {
-    const pane = $('diff-pane');
-    if (!state.selectedDiff) {
-      pane.classList.add('hidden');
-      return;
+  function renderStashFilesHtml(stashDiff) {
+    const files = stashDiff?.files || [];
+    if (!files.length) {
+      return '<div class="muted-note" style="padding:10px">No diff content in this stash.</div>';
     }
-    const { path, scope, data } = state.selectedDiff;
-    pane.classList.remove('hidden');
-    $('diff-scope-tag').textContent = scope;
-    $('diff-file-path').textContent = path;
-    $('btn-diff-unified').classList.toggle('on', state.diffMode === 'unified');
-    $('btn-diff-split').classList.toggle('on', state.diffMode === 'split');
-    $('diff-body').innerHTML = renderHunksHtml(data, { allowHunkActions: scope !== 'untracked', scope });
+    return files
+      .map((f) => {
+        const displayPath = f.path || f.newPath || f.oldPath || '(file)';
+        const renameSub = f.origPath && f.origPath !== displayPath ? ` ← ${f.origPath}` : '';
+        const stats = f.binary
+          ? '<span class="file-stats">bin</span>'
+          : f.additions || f.deletions
+            ? `<span class="file-stats">${f.additions ? `<span class="stat-add">+${f.additions}</span>` : ''}${f.deletions ? `<span class="stat-del">-${f.deletions}</span>` : ''}</span>`
+            : '';
+        return `
+          <div class="stash-file-block">
+            <div class="stash-file-head">
+              <span class="file-icon">${getFileIconSvg(displayPath)}</span>
+              <span class="stash-file-path mono" title="${esc(displayPath + renameSub)}">${esc(displayPath)}${renameSub ? `<span class="file-dir">${esc(renameSub)}</span>` : ''}</span>
+              ${stats}
+              <span class="st-badge ${statusClass(f.status)}">${esc(statusLetter(f.status))}</span>
+            </div>
+            ${renderHunksHtml(f, { allowHunkActions: false })}
+          </div>`;
+      })
+      .join('');
   }
 
-  async function openDiff(path, scope) {
+  function renderDiffPane({ preserveScroll = false } = {}) {
+    const pane = $('diff-pane');
+    const bodyEl = $('diff-body');
+    if (!state.selectedDiff) {
+      pane.classList.add('hidden');
+      syncDrawerUi('changes');
+      return;
+    }
+    const prevTop = preserveScroll ? bodyEl.scrollTop : 0;
+    const prevLeft = preserveScroll ? bodyEl.scrollLeft : 0;
+
+    pane.classList.remove('hidden');
+    $('btn-diff-unified').classList.toggle('on', state.diffMode === 'unified');
+    $('btn-diff-split').classList.toggle('on', state.diffMode === 'split');
+
+    const extraEl = $('diff-extra-actions');
+    if (state.selectedDiff.kind === 'stash') {
+      const { ref, message, data, loading } = state.selectedDiff;
+      $('diff-scope-tag').textContent = ref;
+      $('diff-file-path').textContent = message || 'Stash preview';
+      $('diff-file-path').title = `${ref} · ${message || ''}`;
+      extraEl.innerHTML = `
+        <button type="button" class="btn btn-ghost btn-xs" data-stash-act="apply" data-ref="${esc(ref)}" title="Apply stash">Apply</button>
+        <button type="button" class="btn btn-ghost btn-xs" data-stash-act="pop" data-ref="${esc(ref)}" title="Pop stash">Pop</button>`;
+      bodyEl.innerHTML = loading
+        ? '<div class="muted-note" style="padding:10px">Loading stash diff...</div>'
+        : renderStashFilesHtml(data);
+    } else {
+      const { path, scope, fileUri, status, data } = state.selectedDiff;
+      $('diff-scope-tag').textContent = scope;
+      $('diff-file-path').textContent = path;
+      $('diff-file-path').title = path;
+      const btns = [];
+      if (scope === 'staged') {
+        btns.push(`<button type="button" class="btn btn-ghost btn-xs" data-act="unstage" data-path="${esc(path)}" title="Unstage file">Unstage</button>`);
+      } else {
+        btns.push(`<button type="button" class="btn btn-ghost btn-xs" data-act="stage" data-path="${esc(path)}" title="Stage file">Stage</button>`);
+      }
+      if (fileUri && status !== 'D') {
+        btns.push(`<button type="button" class="icon-btn icon-btn-sm" data-act="open" data-uri="${esc(fileUri)}" title="Open file in Antigravity">&#x2197;</button>`);
+      }
+      extraEl.innerHTML = btns.join('');
+      bodyEl.innerHTML = renderHunksHtml(data, { allowHunkActions: scope !== 'untracked', scope });
+    }
+
+    syncDrawerUi('changes');
+    if (preserveScroll) {
+      bodyEl.scrollTop = prevTop;
+      bodyEl.scrollLeft = prevLeft;
+    } else {
+      bodyEl.scrollTop = 0;
+      bodyEl.scrollLeft = 0;
+    }
+  }
+
+  function findStatusFileMeta(path, scope) {
+    if (!state.status) return null;
+    const list =
+      scope === 'staged'
+        ? state.status.staged
+        : scope === 'untracked'
+          ? state.status.untracked
+          : [...(state.status.unstaged || []), ...(state.status.conflicts || [])];
+    return list.find((f) => f.path === path) || null;
+  }
+
+  async function openDiff(path, scope, { toggle = true } = {}) {
+    if (
+      toggle &&
+      state.selectedDiff?.kind === 'file' &&
+      state.selectedDiff.path === path &&
+      state.selectedDiff.scope === scope
+    ) {
+      state.selectedDiff = null;
+      renderDiffPane();
+      if (state.status) renderChanges(state.status);
+      return;
+    }
     try {
       const res = await apiGet('/api/diff', { path, scope });
-      state.selectedDiff = { path, scope, data: res.diff };
+      const meta = findStatusFileMeta(path, scope);
+      state.selectedDiff = {
+        kind: 'file',
+        path,
+        scope,
+        fileUri: meta?.fileUri || '',
+        status: meta?.status || '',
+        data: res.diff,
+      };
       renderDiffPane();
       if (state.status) renderChanges(state.status);
     } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
+  async function openStashDiff(ref, message) {
+    if (state.selectedDiff?.kind === 'stash' && state.selectedDiff.ref === ref) {
+      state.selectedDiff = null;
+      renderDiffPane();
+      if (state.status) renderChanges(state.status);
+      return;
+    }
+    state.selectedDiff = { kind: 'stash', ref, message, loading: true, data: null };
+    renderDiffPane();
+    if (state.status) renderChanges(state.status);
+    try {
+      const res = await apiGet('/api/stash-diff', { ref });
+      if (state.selectedDiff?.kind === 'stash' && state.selectedDiff.ref === ref) {
+        state.selectedDiff = { kind: 'stash', ref, message, loading: false, data: res.diff };
+        renderDiffPane();
+      }
+    } catch (err) {
+      if (state.selectedDiff?.kind === 'stash' && state.selectedDiff.ref === ref) {
+        state.selectedDiff = null;
+        renderDiffPane();
+        if (state.status) renderChanges(state.status);
+      }
       showToast(err.message, true);
     }
   }
@@ -1166,13 +1477,18 @@
     }
   }
 
-  function renderCommitDetail() {
+  function renderCommitDetail({ preserveDiffScroll = false } = {}) {
     const box = $('commit-detail');
     const c = state.selectedCommit;
     if (!c) {
       box.classList.add('hidden');
+      syncDrawerUi('graph');
       return;
     }
+    const prevDiffEl = preserveDiffScroll ? box.querySelector('.commit-diff-pane .diff-body') : null;
+    const prevTop = prevDiffEl ? prevDiffEl.scrollTop : 0;
+    const prevLeft = prevDiffEl ? prevDiffEl.scrollLeft : 0;
+
     box.classList.remove('hidden');
     const filesHtml = (c.files || [])
       .map((f) => {
@@ -1181,14 +1497,24 @@
           : `${f.additions ? `<span class="stat-add">+${f.additions}</span>` : ''} ${f.deletions ? `<span class="stat-del">-${f.deletions}</span>` : ''}`;
         const active = state.commitFileDiff?.path === f.path ? 'selected' : '';
         const { base, dir } = splitPath(f.path);
+        const hasRename = Boolean(f.origPath && f.origPath !== f.path);
+        const subParts = [];
+        if (dir) subParts.push(dir);
+        if (hasRename) subParts.push(`← ${f.origPath}`);
+        const rowTitle = hasRename ? `${f.origPath} → ${f.path}` : f.path;
+        const openBtn =
+          f.fileUri && f.status !== 'D'
+            ? `<div class="row-actions"><button type="button" class="mini-btn" data-act="open" data-uri="${esc(f.fileUri)}" title="Open file in Antigravity">&#x2197;</button></div>`
+            : '';
         return `
-          <div class="file-row ${active}" data-commit-file="${esc(f.path)}">
+          <div class="file-row ${openBtn ? 'has-actions' : ''} ${active}" data-commit-file="${esc(f.path)}">
             <span class="file-icon">${getFileIconSvg(f.path)}</span>
             <div class="file-name-wrap">
-              <span class="file-base ${f.status === 'D' ? 'is-deleted' : ''}" title="${esc(f.path)}">${esc(base)}</span>
-              ${dir ? `<span class="file-dir">${esc(dir)}</span>` : ''}
+              <span class="file-base ${f.status === 'D' ? 'is-deleted' : ''}" title="${esc(rowTitle)}">${esc(base)}</span>
+              ${subParts.length ? `<span class="file-dir">${esc(subParts.join(' · '))}</span>` : ''}
             </div>
             <span class="file-stats">${stats}</span>
+            ${openBtn}
             <span class="st-badge ${statusClass(f.status)}" title="${esc(statusTitle(f.status))}">${esc(statusLetter(f.status))}</span>
           </div>`;
       })
@@ -1196,10 +1522,10 @@
 
     let fileDiffHtml = '';
     if (state.commitFileDiff?.loading) {
-      fileDiffHtml = `<div class="diff-pane" style="margin-top:8px"><div class="diff-head"><span class="diff-file-path mono">${esc(state.commitFileDiff.path)}</span></div><div class="muted-note" style="padding:10px">Loading diff...</div></div>`;
+      fileDiffHtml = `<div class="diff-pane commit-diff-pane"><div class="diff-head"><span class="diff-file-path mono">${esc(state.commitFileDiff.path)}</span></div><div class="muted-note" style="padding:10px">Loading diff...</div></div>`;
     } else if (state.commitFileDiff) {
       fileDiffHtml = `
-        <div class="diff-pane" style="margin-top:8px">
+        <div class="diff-pane commit-diff-pane">
           <div class="diff-head">
             <span class="diff-file-path mono" title="${esc(state.commitFileDiff.path)}">${esc(state.commitFileDiff.path)}</span>
             <div class="diff-head-actions">
@@ -1207,10 +1533,10 @@
                 <button type="button" class="seg-btn ${state.diffMode === 'unified' ? 'on' : ''}" data-cdiff-mode="unified">Unified</button>
                 <button type="button" class="seg-btn ${state.diffMode === 'split' ? 'on' : ''}" data-cdiff-mode="split">Split</button>
               </div>
-              <button type="button" class="icon-btn" id="btn-close-cdiff" title="Close diff">&times;</button>
+              <button type="button" class="icon-btn icon-btn-sm" id="btn-close-cdiff" title="Close diff">&times;</button>
             </div>
           </div>
-          <div class="diff-body" style="max-height:280px">${renderHunksHtml(state.commitFileDiff)}</div>
+          <div class="diff-body">${renderHunksHtml(state.commitFileDiff)}</div>
         </div>`;
     }
 
@@ -1220,9 +1546,10 @@
           <span class="mono" style="font-weight:700">${esc(c.shortHash)}</span>
           <span class="muted-note" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.author)} · ${esc(c.relDate)}</span>
         </div>
-        <div style="display:flex;gap:4px;flex-shrink:0">
+        <div style="display:flex;gap:3px;align-items:center;flex-shrink:0">
           <button type="button" class="btn btn-ghost btn-xs" id="btn-copy-sha" data-sha="${esc(c.hash)}">Copy SHA</button>
-          <button type="button" class="icon-btn" id="btn-close-commit" title="Close commit detail">&times;</button>
+          <button type="button" class="icon-btn icon-btn-sm" id="btn-graph-max" data-toggle-max="graph" title="Maximize drawer">${state.maximized.graph ? ICON_RESTORE : ICON_MAXIMIZE}</button>
+          <button type="button" class="icon-btn icon-btn-sm" id="btn-close-commit" title="Close commit detail (Esc)">&times;</button>
         </div>
       </div>
       <div class="detail-body">
@@ -1231,6 +1558,15 @@
         <div class="commit-files-list">${filesHtml || '<div class="muted-note" style="padding:6px">No file changes.</div>'}</div>
         ${fileDiffHtml}
       </div>`;
+
+    syncDrawerUi('graph');
+    if (preserveDiffScroll) {
+      const nextDiffEl = box.querySelector('.commit-diff-pane .diff-body');
+      if (nextDiffEl) {
+        nextDiffEl.scrollTop = prevTop;
+        nextDiffEl.scrollLeft = prevLeft;
+      }
+    }
   }
 
   async function loadCommitFileDiff(hash, filePath) {
@@ -1251,9 +1587,9 @@
     }
   }
 
-  async function selectCommit(hash) {
+  async function selectCommit(hash, { toggle = true } = {}) {
     // Clicking the already-selected commit collapses the detail drawer
-    if (state.selectedCommit?.hash === hash) {
+    if (toggle && state.selectedCommit?.hash === hash) {
       state.selectedCommit = null;
       state.commitFileDiff = null;
       renderGraphList();
@@ -1291,6 +1627,7 @@
             ? locals
                 .map((b) => {
                   const ab = b.ahead || b.behind ? `<span class="ab-badge num">${b.ahead ? `↑${b.ahead}` : ''}${b.ahead && b.behind ? ' ' : ''}${b.behind ? `↓${b.behind}` : ''}</span>` : '';
+                  const goneBadge = b.gone ? '<span class="gone-badge" title="Upstream branch was deleted on remote">gone</span>' : '';
                   const btns = b.current
                     ? '<span class="muted-note" style="font-size:10.5px">Current</span>'
                     : `<button type="button" class="btn btn-ghost btn-xs" data-br-act="checkout" data-br="${esc(b.name)}">Checkout</button>
@@ -1299,7 +1636,7 @@
                   return `
                     <div class="branch-row ${b.current ? 'current' : ''}">
                       <div class="branch-main">
-                        <div class="branch-title">${b.current ? '<span class="cur-dot"></span>' : ''}<span>${esc(b.name)}</span>${ab}</div>
+                        <div class="branch-title">${b.current ? '<span class="cur-dot"></span>' : ''}<span>${esc(b.name)}</span>${ab}${goneBadge}</div>
                         <div class="branch-meta"><span class="mono">${esc(b.hash)}</span> · ${esc(b.relDate)} · ${esc(b.subject)}</div>
                       </div>
                       <div class="branch-btns">${btns}</div>
@@ -1345,7 +1682,12 @@
               <div class="branch-meta mono" title="${esc(w.path)}">${esc(w.path)}</div>
             </div>
             <div class="branch-btns">
-              ${w.current ? '<span class="muted-note" style="font-size:10.5px">Active</span>' : `<button type="button" class="btn btn-ghost btn-xs" data-wt-remove="${esc(w.path)}" style="color:var(--c-del)">Remove</button>`}
+              ${
+                w.current
+                  ? '<span class="muted-note" style="font-size:10.5px">Active</span>'
+                  : `<button type="button" class="btn btn-ghost btn-xs" data-wt-switch="${esc(w.path)}" title="Switch panel to this worktree">Switch</button>
+                     <button type="button" class="btn btn-ghost btn-xs" data-wt-remove="${esc(w.path)}" style="color:var(--c-del)">Remove</button>`
+              }
             </div>
           </div>`
           )
@@ -1418,8 +1760,12 @@
           .map((l) => `<span class="gh-label" style="border-color:#${esc(l.color)}">${esc(l.name)}</span>`)
           .join('');
         const extra = kind === 'pr' ? `<span class="mono">${esc(it.head)} → ${esc(it.base)}</span>` : `<span>${it.comments || 0} comments</span>`;
+        const isSelected =
+          state.selectedGitHub &&
+          state.selectedGitHub.kind === kind &&
+          Number(state.selectedGitHub.number) === Number(it.number);
         return `
-          <div class="gh-row" data-gh-kind="${kind}" data-gh-num="${it.number}">
+          <div class="gh-row ${isSelected ? 'selected' : ''}" data-gh-kind="${kind}" data-gh-num="${it.number}">
             <div class="gh-row-top">
               <span class="gh-state-dot gh-state-${esc(it.state)}"></span>
               <span class="gh-title">${esc(it.title)}</span>
@@ -1435,7 +1781,20 @@
       .join('');
   }
 
+  function closeGitHubDetail() {
+    state.selectedGitHub = null;
+    $('gh-detail').classList.add('hidden');
+    syncDrawerUi('github');
+    if (state.github.data) renderGitHubView();
+  }
+
   async function loadGitHub() {
+    const listEl = $('gh-list');
+    state.github.loading = true;
+    listEl.classList.add('is-loading');
+    if (!state.github.loaded) {
+      listEl.innerHTML = '<div class="empty-state" style="padding:18px"><div class="empty-sub">Loading GitHub data...</div></div>';
+    }
     try {
       const res = await apiGet('/api/github/overview', { state: state.github.state });
       state.github.data = res.github;
@@ -1443,15 +1802,28 @@
       renderGitHubView();
     } catch (err) {
       showToast(err.message, true);
+    } finally {
+      state.github.loading = false;
+      listEl.classList.remove('is-loading');
     }
   }
 
-  async function openGitHubItem(kind, number) {
+  async function openGitHubItem(kind, number, { toggle = true } = {}) {
+    const num = Number(number);
+    if (toggle && state.selectedGitHub?.kind === kind && state.selectedGitHub?.number === num) {
+      closeGitHubDetail();
+      return;
+    }
+    state.selectedGitHub = { kind, number: num };
+    if (state.github.data) renderGitHubView();
+    const box = $('gh-detail');
+    box.classList.remove('hidden');
+    box.innerHTML = `<div class="detail-head"><span style="font-weight:700">#${num}</span><button type="button" class="icon-btn icon-btn-sm" id="btn-close-gh-detail">&times;</button></div><div class="detail-body"><div class="muted-note">Loading details...</div></div>`;
+    syncDrawerUi('github');
     try {
-      const res = await apiGet('/api/github/item', { kind, number });
+      const res = await apiGet('/api/github/item', { kind, number: num });
+      if (state.selectedGitHub?.kind !== kind || state.selectedGitHub?.number !== num) return;
       const it = res.item;
-      const box = $('gh-detail');
-      box.classList.remove('hidden');
       const commentsHtml = (it.comments || [])
         .map((c) => `<div class="gh-comment"><div class="muted-note" style="margin-bottom:3px"><strong>${esc(c.author)}</strong> · ${esc(c.createdAt?.slice(0, 10))}</div>${esc(c.body)}</div>`)
         .join('');
@@ -1461,10 +1833,11 @@
           : '';
       box.innerHTML = `
         <div class="detail-head">
-          <span style="font-weight:700">#${it.number} ${esc(it.title)}</span>
-          <div style="display:flex;gap:6px;align-items:center">
+          <span style="font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">#${it.number} ${esc(it.title)}</span>
+          <div style="display:flex;gap:4px;align-items:center;flex-shrink:0">
             <a class="gh-link" href="${esc(it.htmlUrl)}" target="_blank" rel="noreferrer">Open ↗</a>
-            <button type="button" class="icon-btn" id="btn-close-gh-detail">&times;</button>
+            <button type="button" class="icon-btn icon-btn-sm" id="btn-gh-max" data-toggle-max="github" title="Maximize drawer">${state.maximized.github ? ICON_RESTORE : ICON_MAXIMIZE}</button>
+            <button type="button" class="icon-btn icon-btn-sm" id="btn-close-gh-detail" title="Close detail (Esc)">&times;</button>
           </div>
         </div>
         <div class="detail-body">
@@ -1472,6 +1845,7 @@
           <div class="detail-msg">${esc(it.body || '(No description)')}</div>
           ${commentsHtml ? `<div class="section-title" style="margin-top:8px">Comments (${it.comments.length})</div>${commentsHtml}` : ''}
         </div>`;
+      syncDrawerUi('github');
     } catch (err) {
       showToast(err.message, true);
     }
@@ -1480,7 +1854,7 @@
   // ---------- Polling ----------
   async function refreshStatus(force = false) {
     try {
-      const res = await apiGet('/api/status', force ? {} : { etag: state.etag });
+      const res = await apiGet('/api/status', force ? { force: '1' } : { etag: state.etag });
       if (res.repo && res.repo !== state.repo) {
         state.repo = res.repo;
         saveRepoForWs(state.workspaces, state.repo);
@@ -1494,20 +1868,24 @@
       renderHeader(state.status);
       renderChanges(state.status);
 
-      // Keep currently opened diff fresh if file still exists in that scope
-      if (state.selectedDiff) {
+      // Keep currently opened diff / stash preview fresh without resetting scroll position
+      if (state.selectedDiff?.kind === 'file') {
         const { path, scope } = state.selectedDiff;
-        const list =
-          scope === 'staged'
-            ? state.status.staged
-            : scope === 'untracked'
-              ? state.status.untracked
-              : [...state.status.unstaged, ...state.status.conflicts];
-        if (list.some((f) => f.path === path)) {
+        const meta = findStatusFileMeta(path, scope);
+        if (meta) {
           const dRes = await apiGet('/api/diff', { path, scope });
           state.selectedDiff.data = dRes.diff;
-          renderDiffPane();
+          state.selectedDiff.fileUri = meta.fileUri || '';
+          state.selectedDiff.status = meta.status || '';
+          renderDiffPane({ preserveScroll: true });
         } else {
+          state.selectedDiff = null;
+          renderDiffPane();
+        }
+      } else if (state.selectedDiff?.kind === 'stash') {
+        const { ref } = state.selectedDiff;
+        const match = state.stashes.find((s) => s.ref === ref);
+        if (!match) {
           state.selectedDiff = null;
           renderDiffPane();
         }
@@ -1563,8 +1941,151 @@
     $('repo-trigger').setAttribute('aria-expanded', String(willOpen));
   });
 
+  const INLINE_FORM_IDS = [
+    'stash-form',
+    'new-branch-form',
+    'wt-form',
+    'gh-token-form',
+    'gh-pr-form',
+    'graph-extra-filters',
+  ];
+
+  function bindFormEnter(inputId, submitBtnId, formId) {
+    const inp = $(inputId);
+    if (!inp) return;
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        $(submitBtnId)?.click();
+      } else if (e.key === 'Escape' && formId) {
+        e.preventDefault();
+        e.stopPropagation();
+        $(formId)?.classList.add('hidden');
+      }
+    });
+  }
+
+  function stepListSelection(direction) {
+    if (state.tab === 'changes') {
+      const rows = Array.from(document.querySelectorAll('#changes-lists .file-row[data-diff-path]')).filter(
+        (el) => el.offsetParent !== null
+      );
+      if (!rows.length) return;
+      const curIdx = rows.findIndex(
+        (r) =>
+          state.selectedDiff?.kind === 'file' &&
+          r.dataset.diffPath === state.selectedDiff.path &&
+          r.dataset.diffScope === state.selectedDiff.scope
+      );
+      const nextIdx = curIdx === -1 ? (direction > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, curIdx + direction));
+      if (nextIdx === curIdx && curIdx !== -1) return;
+      const target = rows[nextIdx];
+      target.scrollIntoView({ block: 'nearest' });
+      openDiff(target.dataset.diffPath, target.dataset.diffScope, { toggle: false });
+    } else if (state.tab === 'graph') {
+      const rows = Array.from(document.querySelectorAll('#graph-list .commit-row[data-commit-hash]'));
+      if (!rows.length) return;
+      const curIdx = rows.findIndex((r) => state.selectedCommit?.hash === r.dataset.commitHash);
+      const nextIdx = curIdx === -1 ? (direction > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, curIdx + direction));
+      if (nextIdx === curIdx && curIdx !== -1) return;
+      const target = rows[nextIdx];
+      target.scrollIntoView({ block: 'nearest' });
+      selectCommit(target.dataset.commitHash, { toggle: false });
+    } else if (state.tab === 'github') {
+      const rows = Array.from(document.querySelectorAll('#gh-list .gh-row[data-gh-num]'));
+      if (!rows.length) return;
+      const curIdx = rows.findIndex(
+        (r) =>
+          state.selectedGitHub &&
+          r.dataset.ghKind === state.selectedGitHub.kind &&
+          Number(r.dataset.ghNum) === Number(state.selectedGitHub.number)
+      );
+      const nextIdx = curIdx === -1 ? (direction > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, curIdx + direction));
+      if (nextIdx === curIdx && curIdx !== -1) return;
+      const target = rows[nextIdx];
+      target.scrollIntoView({ block: 'nearest' });
+      openGitHubItem(target.dataset.ghKind, target.dataset.ghNum, { toggle: false });
+    }
+  }
+
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeRepoMenu();
+    // 1. Confirm modal takes highest keyboard priority
+    if (!$('modal-backdrop').classList.contains('hidden')) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeModal(false);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        closeModal(document.activeElement !== $('modal-cancel'));
+      }
+      return;
+    }
+
+    if (e.key === 'Escape') {
+      if (!$('repo-menu').classList.contains('hidden')) {
+        closeRepoMenu();
+        return;
+      }
+      for (const fid of INLINE_FORM_IDS) {
+        const el = $(fid);
+        if (el && !el.classList.contains('hidden')) {
+          el.classList.add('hidden');
+          return;
+        }
+      }
+      const tab = state.tab;
+      if (state.maximized[tab]) {
+        state.maximized[tab] = false;
+        syncDrawerUi(tab);
+        return;
+      }
+      if (tab === 'changes' && state.selectedDiff) {
+        state.selectedDiff = null;
+        renderDiffPane();
+        if (state.status) renderChanges(state.status);
+        return;
+      }
+      if (tab === 'graph' && state.selectedCommit) {
+        state.selectedCommit = null;
+        state.commitFileDiff = null;
+        renderGraphList();
+        renderCommitDetail();
+        return;
+      }
+      if (tab === 'github' && state.selectedGitHub) {
+        closeGitHubDetail();
+        return;
+      }
+      return;
+    }
+
+    // 2. Arrow-key navigation when not typing in an input
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      const activeTag = document.activeElement?.tagName;
+      if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT' || document.activeElement?.isContentEditable) {
+        return;
+      }
+      e.preventDefault();
+      stepListSelection(e.key === 'ArrowDown' ? 1 : -1);
+    }
+  });
+
+  bindFormEnter('stash-msg', 'btn-stash-save', 'stash-form');
+  bindFormEnter('new-branch-name', 'btn-new-branch-create', 'new-branch-form');
+  bindFormEnter('new-branch-start', 'btn-new-branch-create', 'new-branch-form');
+  bindFormEnter('wt-path', 'btn-wt-add', 'wt-form');
+  bindFormEnter('wt-branch', 'btn-wt-add', 'wt-form');
+  bindFormEnter('gh-token-input', 'btn-gh-token-save', 'gh-token-form');
+  bindFormEnter('gh-pr-title', 'btn-gh-pr-submit', 'gh-pr-form');
+  bindFormEnter('gh-pr-head', 'btn-gh-pr-submit', 'gh-pr-form');
+  bindFormEnter('gh-pr-base', 'btn-gh-pr-submit', 'gh-pr-form');
+  bindFormEnter('graph-author', 'btn-graph-apply', 'graph-extra-filters');
+  bindFormEnter('graph-path', 'btn-graph-apply', 'graph-extra-filters');
+  $('gh-pr-body').addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      $('btn-gh-pr-submit').click();
+    }
   });
 
   async function selectRepo(repoPath) {
@@ -1575,12 +2096,14 @@
     state.etag = '';
     state.selectedDiff = null;
     state.selectedCommit = null;
+    state.commitFileDiff = null;
+    state.selectedGitHub = null;
     state.graph.loaded = false;
     state.github.loaded = false;
     renderReposSelect(state.repos);
     renderDiffPane();
     renderCommitDetail();
-    $('gh-detail').classList.add('hidden');
+    closeGitHubDetail();
     await refreshStatus(true);
     if (state.tab === 'graph') await loadGraph(false);
     if (state.tab === 'branches') await loadBranches();
@@ -1676,7 +2199,11 @@
       showToast(err.message, true);
     }
   });
-  $('btn-stash-toggle').addEventListener('click', () => $('stash-form').classList.toggle('hidden'));
+  $('btn-stash-toggle').addEventListener('click', () => {
+    const f = $('stash-form');
+    f.classList.toggle('hidden');
+    if (!f.classList.contains('hidden')) $('stash-msg').focus();
+  });
   $('btn-stash-cancel').addEventListener('click', () => $('stash-form').classList.add('hidden'));
   $('btn-stash-save').addEventListener('click', async () => {
     try {
@@ -1697,12 +2224,12 @@
   $('btn-diff-unified').addEventListener('click', () => {
     state.diffMode = 'unified';
     localStorage.setItem('agy_git_diff_mode', 'unified');
-    renderDiffPane();
+    renderDiffPane({ preserveScroll: true });
   });
   $('btn-diff-split').addEventListener('click', () => {
     state.diffMode = 'split';
     localStorage.setItem('agy_git_diff_mode', 'split');
-    renderDiffPane();
+    renderDiffPane({ preserveScroll: true });
   });
   $('btn-diff-close').addEventListener('click', () => {
     state.selectedDiff = null;
@@ -1724,7 +2251,11 @@
 
   // ---------- Branches & Worktrees Controls ----------
   $('branch-search').addEventListener('input', () => renderBranchesView());
-  $('btn-new-branch-toggle').addEventListener('click', () => $('new-branch-form').classList.toggle('hidden'));
+  $('btn-new-branch-toggle').addEventListener('click', () => {
+    const f = $('new-branch-form');
+    f.classList.toggle('hidden');
+    if (!f.classList.contains('hidden')) $('new-branch-name').focus();
+  });
   $('btn-new-branch-cancel').addEventListener('click', () => $('new-branch-form').classList.add('hidden'));
   $('btn-new-branch-create').addEventListener('click', async () => {
     const name = $('new-branch-name').value.trim();
@@ -1745,7 +2276,11 @@
     }
   });
 
-  $('btn-wt-toggle').addEventListener('click', () => $('wt-form').classList.toggle('hidden'));
+  $('btn-wt-toggle').addEventListener('click', () => {
+    const f = $('wt-form');
+    f.classList.toggle('hidden');
+    if (!f.classList.contains('hidden')) $('wt-path').focus();
+  });
   $('btn-wt-cancel').addEventListener('click', () => $('wt-form').classList.add('hidden'));
   $('btn-wt-add').addEventListener('click', async () => {
     const path = $('wt-path').value.trim();
@@ -1761,7 +2296,7 @@
       $('wt-branch').value = '';
       $('wt-form').classList.add('hidden');
       showToast('Worktree added');
-      await loadBranches();
+      await refreshAllAfterMutation();
     } catch (err) {
       showToast(err.message, true);
     }
@@ -1785,7 +2320,11 @@
     });
     loadGitHub();
   });
-  $('btn-gh-token-toggle').addEventListener('click', () => $('gh-token-form').classList.toggle('hidden'));
+  $('btn-gh-token-toggle').addEventListener('click', () => {
+    const f = $('gh-token-form');
+    f.classList.toggle('hidden');
+    if (!f.classList.contains('hidden')) $('gh-token-input').focus();
+  });
   $('btn-gh-token-save').addEventListener('click', async () => {
     const token = $('gh-token-input').value.trim();
     if (!token) return showToast('Enter a token', true);
@@ -1819,6 +2358,7 @@
       if (!$('gh-pr-title').value && state.status?.lastCommit?.subject) {
         $('gh-pr-title').value = state.status.lastCommit.subject;
       }
+      $('gh-pr-title').focus();
     }
   });
   $('btn-gh-pr-cancel').addEventListener('click', () => $('gh-pr-form').classList.add('hidden'));
@@ -1852,6 +2392,14 @@
     }
     if (!e.target.closest('#repo-dropdown')) {
       closeRepoMenu();
+    }
+
+    // 0b. Drawer maximize / restore toggle
+    const maxBtn = e.target.closest('[data-toggle-max]');
+    if (maxBtn) {
+      e.stopPropagation();
+      toggleDrawerMaximize(maxBtn.dataset.toggleMax);
+      return;
     }
 
     // 1. File row actions
@@ -1953,9 +2501,10 @@
       return;
     }
 
-    // 5. Stash actions
+    // 5. Stash actions & stash preview
     const stashBtn = e.target.closest('[data-stash-act]');
     if (stashBtn) {
+      e.stopPropagation();
       const action = stashBtn.dataset.stashAct;
       const ref = stashBtn.dataset.ref;
       if (action === 'drop') {
@@ -1972,6 +2521,12 @@
       return;
     }
 
+    const stashRow = e.target.closest('[data-stash-preview]');
+    if (stashRow) {
+      openStashDiff(stashRow.dataset.stashPreview, stashRow.dataset.stashMsg || '');
+      return;
+    }
+
     // 6. Commit row click
     const commitRow = e.target.closest('[data-commit-hash]');
     if (commitRow) {
@@ -1984,7 +2539,7 @@
     if (cDiffMode) {
       state.diffMode = cDiffMode.dataset.cdiffMode;
       localStorage.setItem('agy_git_diff_mode', state.diffMode);
-      renderCommitDetail();
+      renderCommitDetail({ preserveDiffScroll: true });
       return;
     }
     const cFile = e.target.closest('[data-commit-file]');
@@ -2055,7 +2610,15 @@
       return;
     }
 
-    // 9. Worktree remove
+    // 9. Worktree switch & remove
+    const wtSwitch = e.target.closest('[data-wt-switch]');
+    if (wtSwitch) {
+      const path = wtSwitch.dataset.wtSwitch;
+      await selectRepo(path);
+      showToast('Switched to worktree');
+      return;
+    }
+
     const wtBtn = e.target.closest('[data-wt-remove]');
     if (wtBtn) {
       const path = wtBtn.dataset.wtRemove;
@@ -2064,7 +2627,7 @@
       try {
         await apiPost('/api/worktree/remove', { path, force: false });
         showToast('Worktree removed');
-        await loadBranches();
+        await refreshAllAfterMutation();
       } catch (err) {
         showToast(err.message, true);
       }
@@ -2078,7 +2641,7 @@
       return;
     }
     if (e.target.id === 'btn-close-gh-detail') {
-      $('gh-detail').classList.add('hidden');
+      closeGitHubDetail();
     }
   });
 
@@ -2096,12 +2659,13 @@
       state.selectedDiff = null;
       state.selectedCommit = null;
       state.commitFileDiff = null;
+      state.selectedGitHub = null;
       state.graph.loaded = false;
       state.branches = null;
       state.github.loaded = false;
       renderDiffPane();
       renderCommitDetail();
-      $('gh-detail').classList.add('hidden');
+      closeGitHubDetail();
       await refreshStatus(true);
       if (state.tab === 'graph') await loadGraph(false);
       if (state.tab === 'branches') await loadBranches();
