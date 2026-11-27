@@ -143,7 +143,7 @@
     const maxBtn = $(cfg.maxBtnId);
     if (maxBtn) {
       maxBtn.innerHTML = isMax ? ICON_RESTORE : ICON_MAXIMIZE;
-      maxBtn.title = isMax ? 'Restore split view (Esc)' : 'Maximize drawer';
+      setTip(maxBtn, isMax ? 'Restore split view' : 'Maximize drawer', { kbd: isMax ? 'Esc' : '' });
     }
   }
 
@@ -201,6 +201,158 @@
   initSplitResizer('changes');
   initSplitResizer('graph');
   initSplitResizer('github');
+
+  // ---------- Custom Antigravity-Matched Tooltip System ----------
+  const tipState = {
+    el: $('agy-tooltip'),
+    target: null,
+    timer: null,
+    lastHiddenAt: 0,
+    visible: false,
+  };
+
+  function setTip(el, text, { sub = '', kbd = '', mono = false, pos = '' } = {}) {
+    if (!el) return;
+    if (el.hasAttribute('title')) el.removeAttribute('title');
+    if (!text) {
+      el.removeAttribute('data-tip');
+      el.removeAttribute('data-tip-sub');
+      el.removeAttribute('data-tip-kbd');
+      el.removeAttribute('data-tip-mono');
+      el.removeAttribute('data-tip-pos');
+      if (tipState.target === el) hideTooltip();
+      return;
+    }
+    el.setAttribute('data-tip', text);
+    if (sub) el.setAttribute('data-tip-sub', sub);
+    else el.removeAttribute('data-tip-sub');
+    if (kbd) el.setAttribute('data-tip-kbd', kbd);
+    else el.removeAttribute('data-tip-kbd');
+    if (mono) el.setAttribute('data-tip-mono', '1');
+    else el.removeAttribute('data-tip-mono');
+    if (pos) el.setAttribute('data-tip-pos', pos);
+    else el.removeAttribute('data-tip-pos');
+    if (tipState.visible && tipState.target === el) {
+      renderTooltipFor(el);
+    }
+  }
+
+  function hideTooltip(immediate = false) {
+    clearTimeout(tipState.timer);
+    tipState.timer = null;
+    if (tipState.visible) {
+      tipState.lastHiddenAt = Date.now();
+      tipState.visible = false;
+    }
+    tipState.target = null;
+    if (tipState.el) {
+      tipState.el.classList.remove('visible');
+      tipState.el.setAttribute('aria-hidden', 'true');
+      if (immediate) tipState.lastHiddenAt = 0;
+    }
+  }
+
+  function renderTooltipFor(target) {
+    const tipEl = tipState.el;
+    if (!tipEl || !target || !target.isConnected) {
+      hideTooltip();
+      return;
+    }
+    const text = target.getAttribute('data-tip') || '';
+    if (!text) {
+      hideTooltip();
+      return;
+    }
+    const sub = target.getAttribute('data-tip-sub') || '';
+    const kbd = target.getAttribute('data-tip-kbd') || '';
+    const isMono = target.getAttribute('data-tip-mono') === '1';
+    const prefPos = target.getAttribute('data-tip-pos') || 'top';
+
+    const mainHtml = `<span class="agy-tip-main${isMono ? ' mono' : ''}">${esc(text)}</span>`;
+    const kbdHtml = kbd ? `<kbd class="agy-tip-kbd">${esc(kbd)}</kbd>` : '';
+    const subHtml = sub ? `<div class="agy-tip-sub">${esc(sub)}</div>` : '';
+    tipEl.innerHTML = `<div class="agy-tip-row">${mainHtml}${kbdHtml}</div>${subHtml}`;
+
+    // Reset origin before measuring so prior right-edge coordinates never force artificial wrapping
+    tipEl.style.top = '0px';
+    tipEl.style.left = '0px';
+    const rect = target.getBoundingClientRect();
+    const tipW = tipEl.offsetWidth;
+    const tipH = tipEl.offsetHeight;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const gap = 7;
+
+    let placement = prefPos === 'bottom' ? 'bottom' : 'top';
+    if (placement === 'top' && rect.top - tipH - gap < 6) {
+      placement = 'bottom';
+    } else if (placement === 'bottom' && rect.bottom + tipH + gap > vh - 6 && rect.top - tipH - gap >= 6) {
+      placement = 'top';
+    }
+
+    const rawTop = placement === 'bottom' ? rect.bottom + gap : rect.top - tipH - gap;
+    const rawLeft = rect.left + rect.width / 2 - tipW / 2;
+    const clampedTop = Math.max(6, Math.min(vh - tipH - 6, rawTop));
+    const clampedLeft = Math.max(8, Math.min(vw - tipW - 8, rawLeft));
+
+    tipEl.dataset.placement = placement;
+    tipEl.style.top = `${Math.round(clampedTop)}px`;
+    tipEl.style.left = `${Math.round(clampedLeft)}px`;
+    tipEl.setAttribute('aria-hidden', 'false');
+    tipEl.classList.add('visible');
+    tipState.visible = true;
+  }
+
+  function scheduleTooltip(target) {
+    if (!target) return;
+    // Runtime safety net: migrate any stray native `title` before the browser can show it
+    if (target.hasAttribute('title')) {
+      const nativeTitle = target.getAttribute('title');
+      if (nativeTitle) target.setAttribute('data-tip', nativeTitle);
+      target.removeAttribute('title');
+    }
+    if (!target.getAttribute('data-tip')) return;
+    if (tipState.target === target && tipState.visible) return;
+
+    clearTimeout(tipState.timer);
+    tipState.target = target;
+    const isWarm = tipState.visible || Date.now() - tipState.lastHiddenAt < 280;
+    const delay = isWarm ? 55 : 300;
+    tipState.timer = setTimeout(() => {
+      if (tipState.target === target) renderTooltipFor(target);
+    }, delay);
+  }
+
+  document.addEventListener('mouseover', (e) => {
+    if (document.body.classList.contains('is-resizing')) return;
+    const target = e.target?.closest?.('[data-tip], [title]');
+    if (!target) {
+      if (tipState.target) hideTooltip();
+      return;
+    }
+    scheduleTooltip(target);
+  });
+
+  document.addEventListener('mouseout', (e) => {
+    if (!tipState.target) return;
+    const next = e.relatedTarget?.closest?.('[data-tip], [title]');
+    if (next !== tipState.target) {
+      hideTooltip();
+    }
+  });
+
+  document.addEventListener('focusin', (e) => {
+    const target = e.target?.closest?.('[data-tip], [title]');
+    if (target && target.matches(':focus-visible')) scheduleTooltip(target);
+  });
+  document.addEventListener('focusout', () => hideTooltip());
+  document.addEventListener('pointerdown', () => hideTooltip(true), true);
+  document.addEventListener('scroll', () => hideTooltip(true), true);
+  document.addEventListener('keydown', () => {
+    if (tipState.visible || tipState.timer) hideTooltip(true);
+  }, true);
+  window.addEventListener('blur', () => hideTooltip(true));
+  window.addEventListener('resize', () => hideTooltip(true));
 
   function hideToast() {
     clearTimeout(state.toastTimer);
@@ -426,12 +578,12 @@
     if (['sh', 'bash', 'zsh'].includes(ext) || base === 'makefile' || ext === 'mk') {
       return '<svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="m3 5.2 3.2 2.8L3 10.8M7.6 11h5.2" fill="none" stroke="#4caf7d" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     }
-    // JS / TS
+    // JS / TS — frameless bold geometric glyphs matching Antigravity native icons
     if (['js', 'mjs', 'cjs', 'jsx'].includes(ext)) {
-      return '<svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.2" y="2.2" width="11.6" height="11.6" rx="2.2" fill="#e5be53"/><path d="M6.6 6.2v4.1c0 .9-.5 1.4-1.3 1.4-.5 0-.9-.2-1.1-.5M11.4 6.8c-.3-.4-.8-.6-1.4-.6-.9 0-1.4.4-1.4 1.1 0 .7.5 1 1.4 1.2.9.2 1.5.5 1.5 1.4 0 .9-.7 1.5-1.7 1.5-.8 0-1.4-.3-1.8-.8" fill="none" stroke="#1e293b" stroke-width="1.25" stroke-linecap="round"/></svg>';
+      return '<svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.1 3.6h1.85v6.15c0 1.75-1.05 2.75-2.85 2.75-1.05 0-1.85-.35-2.35-1.05l1.15-1.15c.28.42.65.65 1.15.65.68 0 1.05-.42 1.05-1.25V3.6Z" fill="#e2aa2b"/><path d="M11.15 12.5c-1.5 0-2.55-.6-3.15-1.55l1.3-1c.42.65 1.05 1.05 1.88 1.05.78 0 1.28-.35 1.28-.92 0-.58-.42-.85-1.55-1.18l-.62-.18c-1.45-.42-2.25-1.18-2.25-2.48 0-1.52 1.2-2.64 2.95-2.64 1.32 0 2.25.5 2.85 1.38l-1.26.96c-.4-.55-.92-.86-1.6-.86-.68 0-1.12.32-1.12.84 0 .52.38.78 1.42 1.08l.65.2c1.58.46 2.42 1.22 2.42 2.58 0 1.65-1.28 2.7-3.2 2.7Z" fill="#e2aa2b"/></svg>';
     }
     if (['ts', 'tsx'].includes(ext)) {
-      return '<svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.2" y="2.2" width="11.6" height="11.6" rx="2.2" fill="#529ef0"/><path d="M4 6.4h3.8M5.9 6.4v5.1M11.8 7c-.3-.4-.8-.6-1.4-.6-.8 0-1.3.4-1.3 1 0 .6.4.9 1.3 1.1.9.2 1.4.6 1.4 1.4 0 .9-.6 1.5-1.6 1.5-.7 0-1.3-.3-1.7-.7" fill="none" stroke="#fff" stroke-width="1.25" stroke-linecap="round"/></svg>';
+      return '<svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.65 3.6h5.85v1.65H5.5v7.1H3.65v-7.1H1.65V3.6Z" fill="#529ef0"/><path d="M11.15 12.5c-1.5 0-2.55-.6-3.15-1.55l1.3-1c.42.65 1.05 1.05 1.88 1.05.78 0 1.28-.35 1.28-.92 0-.58-.42-.85-1.55-1.18l-.62-.18c-1.45-.42-2.25-1.18-2.25-2.48 0-1.52 1.2-2.64 2.95-2.64 1.32 0 2.25.5 2.85 1.38l-1.26.96c-.4-.55-.92-.86-1.6-.86-.68 0-1.12.32-1.12.84 0 .52.38.78 1.42 1.08l.65.2c1.58.46 2.42 1.22 2.42 2.58 0 1.65-1.28 2.7-3.2 2.7Z" fill="#529ef0"/></svg>';
     }
     // CSS
     if (ext === 'css' || ext === 'scss') {
@@ -484,7 +636,7 @@
           <button type="button" class="dd-item ${isAct ? 'active' : ''}" role="option" aria-selected="${isAct}" data-select-repo="${esc(r.path)}">
             <span class="dd-item-left">
               <svg class="dd-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-6.5"/></svg>
-              <span class="dd-item-name" title="${esc(r.path)}">${esc(r.label)}</span>
+              <span class="dd-item-name" data-tip="${esc(r.path)}" data-tip-mono="1">${esc(r.label)}</span>
               ${wtTag}
             </span>
             <span class="dd-item-branch">${esc(r.branch)}</span>
@@ -523,19 +675,26 @@
     pullBtn.classList.toggle('has-pending', behind > 0);
     pullBadge.textContent = behind > 99 ? '99+' : String(behind);
     pullBadge.classList.toggle('hidden', behind <= 0);
-    pullBtn.title = behind > 0 ? `Pull ${behind} incoming commit${behind > 1 ? 's' : ''} from upstream` : 'Pull from upstream';
+    setTip(
+      pullBtn,
+      behind > 0 ? `Pull ${behind} incoming commit${behind > 1 ? 's' : ''} from upstream` : 'Pull from upstream',
+      { pos: 'bottom' }
+    );
 
     const pushBtn = $('btn-push');
     const pushBadge = $('push-badge');
     pushBtn.classList.toggle('has-pending', ahead > 0);
     pushBadge.textContent = ahead > 99 ? '99+' : String(ahead);
     pushBadge.classList.toggle('hidden', ahead <= 0);
-    pushBtn.title =
+    setTip(
+      pushBtn,
       ahead > 0
         ? `Push ${ahead} outgoing commit${ahead > 1 ? 's' : ''} to remote`
         : !st.upstream && st.branch && st.branch !== '(detached)'
           ? `Publish branch "${st.branch}" to origin`
-          : 'Push to remote';
+          : 'Push to remote',
+      { pos: 'bottom' }
+    );
 
     $('upstream-name').textContent = st.upstream ? `→ ${st.upstream}` : 'no upstream';
   }
@@ -571,13 +730,13 @@
 
     const actions = [];
     if (groupScope === 'staged') {
-      actions.push(`<button type="button" class="mini-btn" data-act="unstage" data-path="${esc(f.path)}" title="Unstage">&minus;</button>`);
+      actions.push(`<button type="button" class="mini-btn" data-act="unstage" data-path="${esc(f.path)}" data-tip="Unstage">&minus;</button>`);
     } else {
-      actions.push(`<button type="button" class="mini-btn" data-act="stage" data-path="${esc(f.path)}" title="Stage">+</button>`);
-      actions.push(`<button type="button" class="mini-btn danger" data-act="discard" data-path="${esc(f.path)}" data-scope="${esc(groupScope)}" title="Discard changes">&#x21BA;</button>`);
+      actions.push(`<button type="button" class="mini-btn" data-act="stage" data-path="${esc(f.path)}" data-tip="Stage">+</button>`);
+      actions.push(`<button type="button" class="mini-btn danger" data-act="discard" data-path="${esc(f.path)}" data-scope="${esc(groupScope)}" data-tip="Discard changes">&#x21BA;</button>`);
     }
     if (f.fileUri && f.status !== 'D') {
-      actions.push(`<button type="button" class="mini-btn" data-act="open" data-uri="${esc(f.fileUri)}" title="Open file in Antigravity">&#x2197;</button>`);
+      actions.push(`<button type="button" class="mini-btn" data-act="open" data-uri="${esc(f.fileUri)}" data-tip="Open file in Antigravity">&#x2197;</button>`);
     }
 
     const hasRename = Boolean(f.origPath && f.origPath !== f.path);
@@ -590,12 +749,12 @@
       <div class="file-row ${actions.length ? 'has-actions' : ''} ${isSelected ? 'selected' : ''}" data-diff-path="${esc(f.path)}" data-diff-scope="${esc(groupScope)}" style="padding-left:${6 + indentPx}px">
         <span class="file-icon">${getFileIconSvg(f.path)}</span>
         <div class="file-name-wrap">
-          <span class="file-base ${f.status === 'D' ? 'is-deleted' : ''}" title="${esc(rowTitle)}">${esc(base)}</span>
+          <span class="file-base ${f.status === 'D' ? 'is-deleted' : ''}" data-tip="${esc(rowTitle)}" data-tip-mono="1">${esc(base)}</span>
           ${dirDisplay}
         </div>
         ${statsHtml}
         <div class="row-actions">${actions.join('')}</div>
-        <span class="st-badge ${statusClass(f.status)}" title="${esc(statusTitle(f.status))}">${esc(statusLetter(f.status))}</span>
+        <span class="st-badge ${statusClass(f.status)}" data-tip="${esc(statusTitle(f.status))}">${esc(statusLetter(f.status))}</span>
       </div>`;
   }
 
@@ -632,7 +791,7 @@
         : files.map((f) => renderFileRowHtml(f, groupScope, 0)).join('');
     return `
       <div class="group-block ${isCollapsed ? 'collapsed' : ''}" data-group-key="${esc(groupKey)}">
-        <div class="group-head" data-toggle-group="${esc(groupKey)}" role="button" aria-expanded="${!isCollapsed}" title="Click to ${isCollapsed ? 'expand' : 'collapse'}">
+        <div class="group-head" data-toggle-group="${esc(groupKey)}" role="button" aria-expanded="${!isCollapsed}" data-tip="Click to ${isCollapsed ? 'expand' : 'collapse'}">
           <div class="group-head-left">
             ${GROUP_CHEV_SVG}
             <span>${esc(title)}</span>
@@ -658,21 +817,21 @@
           'Staged Changes',
           st.staged,
           'staged',
-          '<button type="button" class="btn btn-ghost btn-xs" data-bulk="unstage-all">Unstage All</button>'
+          '<button type="button" class="btn btn-ghost btn-xs" data-bulk="unstage-all" data-tip="Unstage all staged files">Unstage All</button>'
         ),
         renderGroup(
           'unstaged',
           'Changes',
           st.unstaged,
           'unstaged',
-          '<button type="button" class="btn btn-ghost btn-xs" data-bulk="stage-unstaged">Stage</button><button type="button" class="btn btn-ghost btn-xs" data-bulk="discard-unstaged">Discard</button>'
+          '<button type="button" class="btn btn-ghost btn-xs" data-bulk="stage-unstaged" data-tip="Stage all modified files">Stage</button><button type="button" class="btn btn-ghost btn-xs" data-bulk="discard-unstaged" data-tip="Discard all unstaged changes">Discard</button>'
         ),
         renderGroup(
           'untracked',
           'Untracked',
           st.untracked,
           'untracked',
-          '<button type="button" class="btn btn-ghost btn-xs" data-bulk="stage-untracked">Stage</button>'
+          '<button type="button" class="btn btn-ghost btn-xs" data-bulk="stage-untracked" data-tip="Stage all untracked files">Stage</button>'
         ),
       ].join('');
       wrap.innerHTML = html;
@@ -688,15 +847,15 @@
         .map((s) => {
           const isSelected = state.selectedDiff?.kind === 'stash' && state.selectedDiff.ref === s.ref;
           return `
-          <div class="stash-row ${isSelected ? 'selected' : ''}" data-stash-preview="${esc(s.ref)}" data-stash-msg="${esc(s.message)}" title="Click to preview stash diff">
+          <div class="stash-row ${isSelected ? 'selected' : ''}" data-stash-preview="${esc(s.ref)}" data-stash-msg="${esc(s.message)}" data-tip="${esc(s.message)}" data-tip-sub="Click to preview stash diff">
             <div class="stash-meta">
-              <div class="stash-msg" title="${esc(s.message)}">${esc(s.message)}</div>
+              <div class="stash-msg">${esc(s.message)}</div>
               <div class="stash-sub mono">${esc(s.ref)} · ${esc(s.relDate)}</div>
             </div>
             <div class="stash-btns">
-              <button type="button" class="btn btn-ghost btn-xs" data-stash-act="apply" data-ref="${esc(s.ref)}">Apply</button>
-              <button type="button" class="btn btn-ghost btn-xs" data-stash-act="pop" data-ref="${esc(s.ref)}">Pop</button>
-              <button type="button" class="btn btn-ghost btn-xs" data-stash-act="drop" data-ref="${esc(s.ref)}" style="color:var(--c-del)">Drop</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-stash-act="apply" data-ref="${esc(s.ref)}" data-tip="Apply stash (keep in list)">Apply</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-stash-act="pop" data-ref="${esc(s.ref)}" data-tip="Pop stash (apply &amp; drop)">Pop</button>
+              <button type="button" class="btn btn-ghost btn-xs" data-stash-act="drop" data-ref="${esc(s.ref)}" data-tip="Drop stash permanently" style="color:var(--c-del)">Drop</button>
             </div>
           </div>`;
         })
@@ -992,9 +1151,9 @@
           <div class="stash-file-block">
             <div class="stash-file-head">
               <span class="file-icon">${getFileIconSvg(displayPath)}</span>
-              <span class="stash-file-path mono" title="${esc(displayPath + renameSub)}">${esc(displayPath)}${renameSub ? `<span class="file-dir">${esc(renameSub)}</span>` : ''}</span>
+              <span class="stash-file-path mono" data-tip="${esc(displayPath + renameSub)}" data-tip-mono="1">${esc(displayPath)}${renameSub ? `<span class="file-dir">${esc(renameSub)}</span>` : ''}</span>
               ${stats}
-              <span class="st-badge ${statusClass(f.status)}">${esc(statusLetter(f.status))}</span>
+              <span class="st-badge ${statusClass(f.status)}" data-tip="${esc(statusTitle(f.status))}">${esc(statusLetter(f.status))}</span>
             </div>
             ${renderHunksHtml(f, { allowHunkActions: false })}
           </div>`;
@@ -1022,10 +1181,10 @@
       const { ref, message, data, loading } = state.selectedDiff;
       $('diff-scope-tag').textContent = ref;
       $('diff-file-path').textContent = message || 'Stash preview';
-      $('diff-file-path').title = `${ref} · ${message || ''}`;
+      setTip($('diff-file-path'), message || 'Stash preview', { sub: ref });
       extraEl.innerHTML = `
-        <button type="button" class="btn btn-ghost btn-xs" data-stash-act="apply" data-ref="${esc(ref)}" title="Apply stash">Apply</button>
-        <button type="button" class="btn btn-ghost btn-xs" data-stash-act="pop" data-ref="${esc(ref)}" title="Pop stash">Pop</button>`;
+        <button type="button" class="btn btn-ghost btn-xs" data-stash-act="apply" data-ref="${esc(ref)}" data-tip="Apply stash">Apply</button>
+        <button type="button" class="btn btn-ghost btn-xs" data-stash-act="pop" data-ref="${esc(ref)}" data-tip="Pop stash">Pop</button>`;
       bodyEl.innerHTML = loading
         ? '<div class="muted-note" style="padding:10px">Loading stash diff...</div>'
         : renderStashFilesHtml(data);
@@ -1033,15 +1192,15 @@
       const { path, scope, fileUri, status, data } = state.selectedDiff;
       $('diff-scope-tag').textContent = scope;
       $('diff-file-path').textContent = path;
-      $('diff-file-path').title = path;
+      setTip($('diff-file-path'), path, { mono: true });
       const btns = [];
       if (scope === 'staged') {
-        btns.push(`<button type="button" class="btn btn-ghost btn-xs" data-act="unstage" data-path="${esc(path)}" title="Unstage file">Unstage</button>`);
+        btns.push(`<button type="button" class="btn btn-ghost btn-xs" data-act="unstage" data-path="${esc(path)}" data-tip="Unstage file">Unstage</button>`);
       } else {
-        btns.push(`<button type="button" class="btn btn-ghost btn-xs" data-act="stage" data-path="${esc(path)}" title="Stage file">Stage</button>`);
+        btns.push(`<button type="button" class="btn btn-ghost btn-xs" data-act="stage" data-path="${esc(path)}" data-tip="Stage file">Stage</button>`);
       }
       if (fileUri && status !== 'D') {
-        btns.push(`<button type="button" class="icon-btn icon-btn-sm" data-act="open" data-uri="${esc(fileUri)}" title="Open file in Antigravity">&#x2197;</button>`);
+        btns.push(`<button type="button" class="icon-btn icon-btn-sm" data-act="open" data-uri="${esc(fileUri)}" data-tip="Open file in Antigravity">&#x2197;</button>`);
       }
       extraEl.innerHTML = btns.join('');
       bodyEl.innerHTML = renderHunksHtml(data, { allowHunkActions: scope !== 'untracked', scope });
@@ -1124,10 +1283,12 @@
     }
   }
 
-  // ---------- Graph View & Subway-Arc Continuous SVG ----------
+  // ---------- Graph View & VS Code-Style Compacted Subway-Arc SVG ----------
   const GRAPH_ROW_H = 30;
+  const GRAPH_HALF_H = GRAPH_ROW_H / 2;
   const GRAPH_COL_W = 14;
   const GRAPH_PAD_X = 13;
+  const GRAPH_MAX_COL_IDX = 15;
 
   const REF_HEAD_ICON =
     '<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r="2" fill="currentColor" stroke="none"/></svg>';
@@ -1137,241 +1298,292 @@
     '<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8.5V3.5a1 1 0 0 1 1-1h5l5 5-5 5-5-5Z"/><circle cx="5.5" cy="5.5" r="0.8" fill="currentColor" stroke="none"/></svg>';
 
   function computeContinuousGraph(commits) {
-    const activeLanes = [];
-    const openEdges = [];
-    const edges = [];
+    let inLanes = []; // Dense array of { hash, color } entering the top of the current row (no null holes)
     const nodes = [];
+    const topSegs = []; // { row, fromCol, toCol, color, kind: 'straight' | 'merge-in' }
+    const botSegs = []; // { row, fromCol, toCol, color, kind: 'straight' | 'shift' | 'branch-out' | 'converge', dangling }
+    const rowMaxCol = [];
     let nextColor = 0;
     const PALETTE_SIZE = 8;
 
-    const allocColor = () => nextColor++ % PALETTE_SIZE;
-    const findFreeCol = () => {
-      const idx = activeLanes.findIndex((l) => l === null);
-      if (idx !== -1) return idx;
-      activeLanes.push(null);
-      return activeLanes.length - 1;
-    };
-    const trimNulls = () => {
-      while (activeLanes.length && activeLanes[activeLanes.length - 1] === null) {
-        activeLanes.pop();
-      }
+    const allocColor = (avoidColor = -1) => {
+      let c = nextColor++ % PALETTE_SIZE;
+      if (c === avoidColor) c = nextColor++ % PALETTE_SIZE;
+      return c;
     };
 
     let maxCols = 1;
 
     for (let row = 0; row < commits.length; row++) {
       const c = commits[row];
-      const matchingCols = [];
-      for (let i = 0; i < activeLanes.length; i++) {
-        if (activeLanes[i] && activeLanes[i].hash === c.hash) matchingCols.push(i);
-      }
-
-      let col;
-      let color;
-      if (matchingCols.length > 0) {
-        col = matchingCols[0];
-        color = activeLanes[col].color;
-        for (const mc of matchingCols) {
-          if (mc !== col) activeLanes[mc] = null;
-        }
-      } else {
-        col = findFreeCol();
-        color = allocColor();
-        activeLanes[col] = { hash: c.hash, color };
-      }
-
-      for (let ei = openEdges.length - 1; ei >= 0; ei--) {
-        if (openEdges[ei].toHash === c.hash) {
-          const e = openEdges.splice(ei, 1)[0];
-          edges.push({ ...e, toRow: row, toCol: col });
-        }
-      }
-
+      const nextCommitHash = commits[row + 1]?.hash || '';
       const isHead = (c.refs || []).some((r) => r.type === 'head');
-      nodes.push({ row, col, color, isMerge: Boolean(c.isMerge), isHead });
+      const isLastRow = row === commits.length - 1;
 
-      const parents = c.parents || [];
-      if (parents.length === 0) {
-        activeLanes[col] = null;
+      const matchingCols = [];
+      for (let i = 0; i < inLanes.length; i++) {
+        if (inLanes[i].hash === c.hash) matchingCols.push(i);
+      }
+
+      let nodeCol;
+      let nodeColor;
+      if (matchingCols.length > 0) {
+        // Leftmost matching lane is always the primary trunk; side branches on the right converge into it
+        nodeCol = matchingCols[0];
+        nodeColor = inLanes[nodeCol].color;
       } else {
-        const p0 = parents[0];
-        const existingP0 = activeLanes.findIndex((l, i) => i !== col && l && l.hash === p0);
-        if (existingP0 !== -1) {
-          openEdges.push({ fromRow: row, fromCol: col, railCol: existingP0, toHash: p0, color });
-          activeLanes[col] = null;
-        } else {
-          activeLanes[col] = { hash: p0, color };
-          openEdges.push({ fromRow: row, fromCol: col, railCol: col, toHash: p0, color });
-        }
+        // New branch tip always appends on the right — never disrupts active left rails
+        nodeCol = inLanes.length;
+        nodeColor = isHead && nodeCol === 0 ? 0 : allocColor();
+      }
 
-        for (let pi = 1; pi < parents.length; pi++) {
-          const p = parents[pi];
-          const existing = activeLanes.findIndex((l) => l && l.hash === p);
-          if (existing !== -1) {
-            openEdges.push({
-              fromRow: row,
-              fromCol: col,
-              railCol: existing,
-              toHash: p,
-              color: activeLanes[existing].color,
-            });
-          } else {
-            const newCol = findFreeCol();
-            const newColor = allocColor();
-            activeLanes[newCol] = { hash: p, color: newColor };
-            openEdges.push({ fromRow: row, fromCol: col, railCol: newCol, toHash: p, color: newColor });
+      // Let HEAD adopt primary blue (color 0) for its outgoing trunk if no other surviving lane uses it
+      let outNodeColor = nodeColor;
+      if (isHead && nodeCol === 0 && !inLanes.some((l, i) => !matchingCols.includes(i) && l.color === 0)) {
+        outNodeColor = 0;
+      }
+
+      const matchSet = new Set(matchingCols);
+
+      // 1. Top half of row (yTop -> yMid): incoming matching rails & pass-through vertical rails
+      for (let i = 0; i < inLanes.length; i++) {
+        if (matchSet.has(i)) {
+          topSegs.push({
+            row,
+            fromCol: i,
+            toCol: nodeCol,
+            color: inLanes[i].color,
+            kind: i === nodeCol ? 'straight' : 'merge-in',
+          });
+        } else {
+          topSegs.push({
+            row,
+            fromCol: i,
+            toCol: i,
+            color: inLanes[i].color,
+            kind: 'straight',
+          });
+        }
+      }
+
+      nodes.push({ row, col: nodeCol, color: outNodeColor, isMerge: Boolean(c.isMerge), isHead });
+
+      // 2. Build compacted outLanes (exiting bottom of row) & bottom-half segments (yMid -> yBot)
+      const parents = c.parents || [];
+      const p0 = parents[0] || null;
+
+      // Check if first parent is already tracked by a surviving lane strictly to our LEFT
+      let leftExistingP0 = -1;
+      if (p0) {
+        for (let i = 0; i < nodeCol && i < inLanes.length; i++) {
+          if (!matchSet.has(i) && inLanes[i].hash === p0) {
+            leftExistingP0 = i;
+            break;
           }
         }
       }
+      // If p0 is the very next row, keep our rail 1 more half-row so the arc lands cleanly in p0's dot;
+      // otherwise converge immediately into the left rail so right-side lanes compact right away.
+      const convergeP0Now = leftExistingP0 !== -1 && nextCommitHash !== p0;
+      const keepNodeLane = Boolean(p0) && !convergeP0Now;
 
-      trimNulls();
-      maxCols = Math.max(maxCols, col + 1, activeLanes.length);
+      const outLanes = [];
+      const inToOut = new Map();
+      const totalSlots = Math.max(inLanes.length, nodeCol + 1);
+
+      for (let i = 0; i < totalSlots; i++) {
+        if (i === nodeCol) {
+          if (keepNodeLane) {
+            const outCol = outLanes.length;
+            outLanes.push({ hash: p0, color: outNodeColor });
+            botSegs.push({
+              row,
+              fromCol: nodeCol,
+              toCol: outCol,
+              color: outNodeColor,
+              kind: outCol === nodeCol ? 'straight' : 'shift',
+              dangling: isLastRow,
+            });
+          }
+        } else if (i < inLanes.length && !matchSet.has(i)) {
+          const outCol = outLanes.length;
+          inToOut.set(i, outCol);
+          outLanes.push(inLanes[i]);
+          botSegs.push({
+            row,
+            fromCol: i,
+            toCol: outCol,
+            color: inLanes[i].color,
+            kind: outCol === i ? 'straight' : 'shift',
+            dangling: isLastRow,
+          });
+        }
+      }
+
+      if (convergeP0Now) {
+        const targetOutCol = inToOut.get(leftExistingP0);
+        if (targetOutCol !== undefined) {
+          botSegs.push({
+            row,
+            fromCol: nodeCol,
+            toCol: targetOutCol,
+            color: outNodeColor,
+            kind: 'converge',
+            dangling: isLastRow,
+          });
+        }
+      }
+
+      // Secondary parents (merge commit) always connect to an existing lane or spawn on the RIGHT
+      for (let pi = 1; pi < parents.length; pi++) {
+        const p = parents[pi];
+        if (!p || p === p0) continue;
+        const existingOut = outLanes.findIndex((l) => l.hash === p);
+        if (existingOut !== -1) {
+          botSegs.push({
+            row,
+            fromCol: nodeCol,
+            toCol: existingOut,
+            color: outLanes[existingOut].color,
+            kind: existingOut === nodeCol ? 'straight' : 'branch-out',
+            dangling: isLastRow,
+          });
+        } else {
+          const newOutCol = outLanes.length;
+          const newColor = allocColor(outNodeColor);
+          outLanes.push({ hash: p, color: newColor });
+          botSegs.push({
+            row,
+            fromCol: nodeCol,
+            toCol: newOutCol,
+            color: newColor,
+            kind: 'branch-out',
+            dangling: isLastRow,
+          });
+        }
+      }
+
+      // Exact rightmost occupied column in this row (covers node, incoming rails, outgoing rails & arcs)
+      const rMax = Math.min(
+        GRAPH_MAX_COL_IDX,
+        Math.max(nodeCol, inLanes.length - 1, outLanes.length - 1, 0)
+      );
+      rowMaxCol.push(rMax);
+      maxCols = Math.max(maxCols, rMax + 1);
+
+      inLanes = outLanes;
     }
 
-    for (const e of openEdges) {
-      edges.push({ ...e, toRow: commits.length, toCol: e.railCol, dangling: true });
-      maxCols = Math.max(maxCols, e.railCol + 1);
-    }
-
-    // Compute exact rightmost occupied column per row so text hugs its own rails tightly
-    const rowMaxCol = nodes.map((n) => Math.min(n.col, 9));
-    for (const e of edges) {
-      const fCol = Math.min(e.fromCol, 9);
-      const rCol = Math.min(e.railCol, 9);
-      const tCol = Math.min(e.toCol, 9);
-      if (e.fromRow < commits.length) {
-        rowMaxCol[e.fromRow] = Math.max(rowMaxCol[e.fromRow], fCol, rCol);
-      }
-      const endRow = Math.min(e.toRow, commits.length - 1);
-      for (let r = e.fromRow + 1; r < endRow; r++) {
-        rowMaxCol[r] = Math.max(rowMaxCol[r], rCol);
-      }
-      if (!e.dangling && e.toRow < commits.length) {
-        rowMaxCol[e.toRow] = Math.max(rowMaxCol[e.toRow], rCol, tCol);
-      } else if (e.dangling && commits.length > 0) {
-        const last = commits.length - 1;
-        if (last >= e.fromRow) rowMaxCol[last] = Math.max(rowMaxCol[last], rCol);
-      }
-    }
-
-    return { nodes, edges, rowMaxCol, maxCols: Math.min(Math.max(maxCols, 1), 10) };
+    return {
+      nodes,
+      topSegs,
+      botSegs,
+      rowMaxCol,
+      maxCols: Math.min(Math.max(maxCols, 1), GRAPH_MAX_COL_IDX + 1),
+    };
   }
 
-  function buildEdgePath(e, cx, cy) {
-    const x1 = cx(e.fromCol);
-    const y1 = cy(e.fromRow);
-    const xr = cx(e.railCol);
-    const x2 = cx(e.toCol);
-    const y2 = e.dangling ? e.toRow * GRAPH_ROW_H : cy(e.toRow);
+  function buildSegmentPath(seg, isTop, cx) {
+    const x1 = cx(seg.fromCol);
+    const x2 = cx(seg.toCol);
+    const y1 = isTop ? seg.row * GRAPH_ROW_H : seg.row * GRAPH_ROW_H + GRAPH_HALF_H;
+    const y2 = isTop ? seg.row * GRAPH_ROW_H + GRAPH_HALF_H : (seg.row + 1) * GRAPH_ROW_H;
 
-    // Pure straight vertical rail
-    if (x1 === xr && xr === x2) {
+    if (x1 === x2) {
       return `M ${x1} ${y1} L ${x2} ${y2}`;
     }
 
-    // Subway-style quarter-circle elbow helper:
-    // Smooth horizontal-departure / vertical-arrival OR vertical-departure / horizontal-arrival
-    const drawMetroJoin = (sx, sy, tx, ty, exitHorizontal) => {
-      const dx = tx - sx;
-      const dy = ty - sy;
-      const adx = Math.abs(dx);
-      const dir = dx > 0 ? 1 : -1;
-      const r = Math.min(9.5, adx * 0.5, dy * 0.45);
-      if (adx <= GRAPH_COL_W + 1) {
-        // Adjacent lane: silky symmetric S-curve
-        const c = dy * 0.52;
-        return `M ${sx} ${sy} C ${sx} ${sy + c}, ${tx} ${ty - c}, ${tx} ${ty}`;
-      }
-      if (exitHorizontal) {
-        // Branch out from node horizontally, curve smoothly down into vertical rail
-        return `M ${sx} ${sy} L ${tx - dir * r} ${sy} Q ${tx} ${sy} ${tx} ${sy + r} L ${tx} ${ty}`;
-      }
-      // Ride vertical rail down, curve cleanly with a quarter-circle into target node
-      return `M ${sx} ${sy} L ${sx} ${ty - r} Q ${sx} ${ty} ${sx + dir * r} ${ty} L ${tx} ${ty}`;
-    };
+    const dx = x2 - x1;
+    const adx = Math.abs(dx);
+    const dir = dx > 0 ? 1 : -1;
 
-    // Single-row jump
-    if (!e.dangling && e.toRow - e.fromRow === 1) {
-      // Branching right (merge out to secondary parent): exit horizontally into right rail
-      // Converging left (branch joining main trunk): ride down and quarter-circle left into trunk node
-      return drawMetroJoin(x1, y1, x2, y2, x2 > x1);
+    if (seg.kind === 'merge-in') {
+      // Top half: vertical down from yTop, quarter-circle into horizontal arrival at commit dot (x2, yMid)
+      const r = Math.min(10, adx * 0.65, GRAPH_HALF_H - 2);
+      return `M ${x1} ${y1} L ${x1} ${y2 - r} Q ${x1} ${y2} ${x1 + dir * r} ${y2} L ${x2} ${y2}`;
     }
 
-    const segs = [];
-    let curX = x1;
-    let curY = y1;
-
-    // Top turn: x1 -> xr
-    if (x1 !== xr) {
-      const dx = xr - x1;
-      const dir = dx > 0 ? 1 : -1;
-      const adx = Math.abs(dx);
-      const r = Math.min(9.5, adx * 0.5, GRAPH_ROW_H * 0.46);
-      if (adx <= GRAPH_COL_W + 1) {
-        const yEnd = Math.min(y1 + GRAPH_ROW_H * 0.85, y2);
-        const c = (yEnd - y1) * 0.52;
-        segs.push(`M ${x1} ${y1} C ${x1} ${y1 + c}, ${xr} ${yEnd - c}, ${xr} ${yEnd}`);
-        curY = yEnd;
-      } else {
-        // Smooth horizontal metro branch-out at y1 into rail xr
-        segs.push(`M ${x1} ${y1} L ${xr - dir * r} ${y1} Q ${xr} ${y1} ${xr} ${y1 + r}`);
-        curY = y1 + r;
-      }
-      curX = xr;
-    } else {
-      segs.push(`M ${x1} ${y1}`);
+    if (seg.kind === 'branch-out') {
+      // Bottom half: horizontal departure from commit dot (x1, yMid), quarter-circle down to vertical (x2, yBot)
+      const r = Math.min(10, adx * 0.65, GRAPH_HALF_H - 2);
+      return `M ${x1} ${y1} L ${x2 - dir * r} ${y1} Q ${x2} ${y1} ${x2} ${y1 + r} L ${x2} ${y2}`;
     }
 
-    // Bottom turn: xr -> x2
-    if (xr !== x2 && !e.dangling) {
-      const dx = x2 - xr;
-      const dir = dx > 0 ? 1 : -1;
-      const adx = Math.abs(dx);
-      const r = Math.min(9.5, adx * 0.5, Math.max(y2 - curY, 4) * 0.46);
-      if (adx <= GRAPH_COL_W + 1) {
-        const yStart = Math.max(y2 - GRAPH_ROW_H * 0.85, curY);
-        if (yStart > curY) segs.push(`L ${xr} ${yStart}`);
-        const c = (y2 - yStart) * 0.52;
-        segs.push(`C ${xr} ${yStart + c}, ${x2} ${y2 - c}, ${x2} ${y2}`);
-      } else {
-        const yTurn = Math.max(y2 - r, curY);
-        if (yTurn > curY) segs.push(`L ${xr} ${yTurn}`);
-        segs.push(`Q ${xr} ${y2} ${xr + dir * r} ${y2} L ${x2} ${y2}`);
-      }
-    } else if (y2 > curY) {
-      segs.push(`L ${curX} ${y2}`);
+    // Compacting shift or converge: vertical tangent at both ends (silky S-curve or compact metro jog)
+    if (adx <= GRAPH_COL_W + 1) {
+      const c = GRAPH_HALF_H * 0.56;
+      return `M ${x1} ${y1} C ${x1} ${y1 + c}, ${x2} ${y2 - c}, ${x2} ${y2}`;
     }
-
-    return segs.join(' ');
+    const ym = (y1 + y2) / 2;
+    const r = Math.min(7, adx * 0.4, GRAPH_HALF_H * 0.48);
+    return `M ${x1} ${y1} L ${x1} ${ym - r} Q ${x1} ${ym} ${x1 + dir * r} ${ym} L ${x2 - dir * r} ${ym} Q ${x2} ${ym} ${x2} ${ym + r} L ${x2} ${y2}`;
   }
 
   function renderContinuousGraphSvg(layout, rowCount) {
     const palette = getLaneColors();
     const width = GRAPH_PAD_X * 2 + (layout.maxCols - 1) * GRAPH_COL_W + 6;
     const height = rowCount * GRAPH_ROW_H;
-    const cx = (col) => GRAPH_PAD_X + Math.min(col, 9) * GRAPH_COL_W;
-    const cy = (row) => row * GRAPH_ROW_H + GRAPH_ROW_H / 2;
+    const cx = (col) => GRAPH_PAD_X + Math.min(col, GRAPH_MAX_COL_IDX) * GRAPH_COL_W;
+    const cy = (row) => row * GRAPH_ROW_H + GRAPH_HALF_H;
     const colColor = (idx) => palette[idx % palette.length];
 
-    const straight = [];
-    const curved = [];
-    for (const e of layout.edges) {
-      const d = buildEdgePath(e, cx, cy);
-      const stroke = colColor(e.color);
-      const opacity = e.dangling ? '0.58' : '0.92';
-      const isStraight = e.fromCol === e.railCol && e.railCol === e.toCol;
-      if (isStraight) {
-        straight.push(
-          `<path d="${d}" fill="none" stroke="${stroke}" stroke-width="1.85" stroke-linecap="round" opacity="${opacity}"/>`
-        );
+    // Merge adjacent straight vertical segments on the same (col, color) into seamless continuous paths
+    const straightRuns = [];
+    const activeRuns = new Map(); // `${col}:${color}` -> { col, color, y1, y2, dangling }
+
+    const pushStraight = (col, color, y1, y2, dangling) => {
+      const key = `${col}:${color}:${dangling ? 1 : 0}`;
+      const prev = activeRuns.get(key);
+      if (prev && prev.y2 === y1) {
+        prev.y2 = y2;
       } else {
-        // Subtle surface bridge halo under curved joins so crossing rails never visually clash
-        curved.push(
-          `<path d="${d}" fill="none" stroke="var(--surface)" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.88"/>` +
-          `<path d="${d}" fill="none" stroke="${stroke}" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" opacity="${opacity}"/>`
-        );
+        const run = { col, color, y1, y2, dangling };
+        activeRuns.set(key, run);
+        straightRuns.push(run);
+      }
+    };
+
+    const shifts = [];
+    const arcs = [];
+
+    for (let r = 0; r < rowCount; r++) {
+      // Process top half then bottom half in chronological y order so vertical runs merge cleanly
+      for (const s of layout.topSegs) {
+        if (s.row !== r) continue;
+        if (s.fromCol === s.toCol) {
+          pushStraight(s.fromCol, s.color, r * GRAPH_ROW_H, r * GRAPH_ROW_H + GRAPH_HALF_H, false);
+        } else {
+          arcs.push({ d: buildSegmentPath(s, true, cx), color: s.color, dangling: false });
+        }
+      }
+      for (const s of layout.botSegs) {
+        if (s.row !== r) continue;
+        if (s.fromCol === s.toCol) {
+          pushStraight(s.fromCol, s.color, r * GRAPH_ROW_H + GRAPH_HALF_H, (r + 1) * GRAPH_ROW_H, Boolean(s.dangling));
+        } else if (s.kind === 'shift') {
+          shifts.push({ d: buildSegmentPath(s, false, cx), color: s.color, dangling: Boolean(s.dangling) });
+        } else {
+          arcs.push({ d: buildSegmentPath(s, false, cx), color: s.color, dangling: Boolean(s.dangling) });
+        }
       }
     }
+
+    const straightSvg = straightRuns.map((run) => {
+      const x = cx(run.col);
+      const stroke = colColor(run.color);
+      const opacity = run.dangling ? '0.55' : '0.92';
+      return `<path d="M ${x} ${run.y1} L ${x} ${run.y2}" fill="none" stroke="${stroke}" stroke-width="1.85" stroke-linecap="round" opacity="${opacity}"/>`;
+    });
+
+    const renderCurved = (list) =>
+      list.map((item) => {
+        const stroke = colColor(item.color);
+        const opacity = item.dangling ? '0.55' : '0.92';
+        return (
+          `<path d="${item.d}" fill="none" stroke="var(--surface)" stroke-width="3.7" stroke-linecap="round" stroke-linejoin="round" opacity="0.88"/>` +
+          `<path d="${item.d}" fill="none" stroke="${stroke}" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" opacity="${opacity}"/>`
+        );
+      });
 
     const dots = layout.nodes.map((n) => {
       const x = cx(n.col);
@@ -1396,7 +1608,7 @@
 
     return {
       width,
-      svg: `<svg class="graph-svg-overlay" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" aria-hidden="true">${straight.join('')}${curved.join('')}${dots.join('')}</svg>`,
+      svg: `<svg class="graph-svg-overlay" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" aria-hidden="true">${straightSvg.join('')}${renderCurved(shifts).join('')}${renderCurved(arcs).join('')}${dots.join('')}</svg>`,
     };
   }
 
@@ -1422,20 +1634,20 @@
         const refsHtml = (c.refs || [])
           .map((r) => {
             if (r.type === 'tag') {
-              return `<span class="ref-chip ref-tag" title="Tag: ${esc(r.name)}">${REF_TAG_ICON}<span class="ref-chip-text">${esc(r.name)}</span></span>`;
+              return `<span class="ref-chip ref-tag" data-tip="Tag: ${esc(r.name)}" data-tip-mono="1">${REF_TAG_ICON}<span class="ref-chip-text">${esc(r.name)}</span></span>`;
             }
             const icon = r.type === 'remote' ? REF_REMOTE_ICON : r.type === 'head' ? REF_HEAD_ICON : '';
-            return `<span class="ref-chip ref-${esc(r.type)}" style="background:${laneColor}" title="${esc(r.name)}">${icon}<span class="ref-chip-text">${esc(r.name)}</span></span>`;
+            return `<span class="ref-chip ref-${esc(r.type)}" style="background:${laneColor}" data-tip="${esc(r.name)}" data-tip-mono="1">${icon}<span class="ref-chip-text">${esc(r.name)}</span></span>`;
           })
           .join('');
 
         const selected = state.selectedCommit?.hash === c.hash ? 'selected' : '';
         const dim = dimMerges && c.isMerge ? 'dim-merge' : '';
         const headCls = node?.isHead ? 'is-head' : '';
-        const tip = `${c.shortHash} · ${c.author} · ${c.relDate}\n${c.subject}`;
+        const tipSub = `${c.shortHash} · ${c.author} · ${c.relDate}`;
 
         return `
-          <div class="commit-row ${selected} ${dim} ${headCls}" data-commit-hash="${esc(c.hash)}" title="${esc(tip)}" style="padding-left:${rowPadLeft}px">
+          <div class="commit-row ${selected} ${dim} ${headCls}" data-commit-hash="${esc(c.hash)}" data-tip="${esc(c.subject)}" data-tip-sub="${esc(tipSub)}" style="padding-left:${rowPadLeft}px">
             <div class="commit-info">
               <div class="commit-main">
                 <span class="commit-subj">${esc(c.subject)}</span>
@@ -1504,18 +1716,18 @@
         const rowTitle = hasRename ? `${f.origPath} → ${f.path}` : f.path;
         const openBtn =
           f.fileUri && f.status !== 'D'
-            ? `<div class="row-actions"><button type="button" class="mini-btn" data-act="open" data-uri="${esc(f.fileUri)}" title="Open file in Antigravity">&#x2197;</button></div>`
+            ? `<div class="row-actions"><button type="button" class="mini-btn" data-act="open" data-uri="${esc(f.fileUri)}" data-tip="Open file in Antigravity">&#x2197;</button></div>`
             : '';
         return `
           <div class="file-row ${openBtn ? 'has-actions' : ''} ${active}" data-commit-file="${esc(f.path)}">
             <span class="file-icon">${getFileIconSvg(f.path)}</span>
             <div class="file-name-wrap">
-              <span class="file-base ${f.status === 'D' ? 'is-deleted' : ''}" title="${esc(rowTitle)}">${esc(base)}</span>
+              <span class="file-base ${f.status === 'D' ? 'is-deleted' : ''}" data-tip="${esc(rowTitle)}" data-tip-mono="1">${esc(base)}</span>
               ${subParts.length ? `<span class="file-dir">${esc(subParts.join(' · '))}</span>` : ''}
             </div>
             <span class="file-stats">${stats}</span>
             ${openBtn}
-            <span class="st-badge ${statusClass(f.status)}" title="${esc(statusTitle(f.status))}">${esc(statusLetter(f.status))}</span>
+            <span class="st-badge ${statusClass(f.status)}" data-tip="${esc(statusTitle(f.status))}">${esc(statusLetter(f.status))}</span>
           </div>`;
       })
       .join('');
@@ -1527,13 +1739,13 @@
       fileDiffHtml = `
         <div class="diff-pane commit-diff-pane">
           <div class="diff-head">
-            <span class="diff-file-path mono" title="${esc(state.commitFileDiff.path)}">${esc(state.commitFileDiff.path)}</span>
+            <span class="diff-file-path mono" data-tip="${esc(state.commitFileDiff.path)}" data-tip-mono="1">${esc(state.commitFileDiff.path)}</span>
             <div class="diff-head-actions">
               <div class="segmented">
                 <button type="button" class="seg-btn ${state.diffMode === 'unified' ? 'on' : ''}" data-cdiff-mode="unified">Unified</button>
                 <button type="button" class="seg-btn ${state.diffMode === 'split' ? 'on' : ''}" data-cdiff-mode="split">Split</button>
               </div>
-              <button type="button" class="icon-btn icon-btn-sm" id="btn-close-cdiff" title="Close diff">&times;</button>
+              <button type="button" class="icon-btn icon-btn-sm" id="btn-close-cdiff" data-tip="Close diff">&times;</button>
             </div>
           </div>
           <div class="diff-body">${renderHunksHtml(state.commitFileDiff)}</div>
@@ -1547,9 +1759,9 @@
           <span class="muted-note" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.author)} · ${esc(c.relDate)}</span>
         </div>
         <div style="display:flex;gap:3px;align-items:center;flex-shrink:0">
-          <button type="button" class="btn btn-ghost btn-xs" id="btn-copy-sha" data-sha="${esc(c.hash)}">Copy SHA</button>
-          <button type="button" class="icon-btn icon-btn-sm" id="btn-graph-max" data-toggle-max="graph" title="Maximize drawer">${state.maximized.graph ? ICON_RESTORE : ICON_MAXIMIZE}</button>
-          <button type="button" class="icon-btn icon-btn-sm" id="btn-close-commit" title="Close commit detail (Esc)">&times;</button>
+          <button type="button" class="btn btn-ghost btn-xs" id="btn-copy-sha" data-sha="${esc(c.hash)}" data-tip="Copy full commit SHA">Copy SHA</button>
+          <button type="button" class="icon-btn icon-btn-sm" id="btn-graph-max" data-toggle-max="graph" data-tip="${state.maximized.graph ? 'Restore split view' : 'Maximize drawer'}"${state.maximized.graph ? ' data-tip-kbd="Esc"' : ''}>${state.maximized.graph ? ICON_RESTORE : ICON_MAXIMIZE}</button>
+          <button type="button" class="icon-btn icon-btn-sm" id="btn-close-commit" data-tip="Close commit detail" data-tip-kbd="Esc">&times;</button>
         </div>
       </div>
       <div class="detail-body">
@@ -1627,7 +1839,7 @@
             ? locals
                 .map((b) => {
                   const ab = b.ahead || b.behind ? `<span class="ab-badge num">${b.ahead ? `↑${b.ahead}` : ''}${b.ahead && b.behind ? ' ' : ''}${b.behind ? `↓${b.behind}` : ''}</span>` : '';
-                  const goneBadge = b.gone ? '<span class="gone-badge" title="Upstream branch was deleted on remote">gone</span>' : '';
+                  const goneBadge = b.gone ? '<span class="gone-badge" data-tip="Upstream branch was deleted on remote">gone</span>' : '';
                   const btns = b.current
                     ? '<span class="muted-note" style="font-size:10.5px">Current</span>'
                     : `<button type="button" class="btn btn-ghost btn-xs" data-br-act="checkout" data-br="${esc(b.name)}">Checkout</button>
@@ -1679,14 +1891,14 @@
           <div class="branch-row ${w.current ? 'current' : ''}">
             <div class="branch-main">
               <div class="branch-title">${w.current ? '<span class="cur-dot"></span>' : ''}<span>${esc(w.branch || (w.detached ? 'detached' : w.name))}</span> <span class="muted-note mono">${esc(w.head)}</span></div>
-              <div class="branch-meta mono" title="${esc(w.path)}">${esc(w.path)}</div>
+              <div class="branch-meta mono" data-tip="${esc(w.path)}" data-tip-mono="1">${esc(w.path)}</div>
             </div>
             <div class="branch-btns">
               ${
                 w.current
                   ? '<span class="muted-note" style="font-size:10.5px">Active</span>'
-                  : `<button type="button" class="btn btn-ghost btn-xs" data-wt-switch="${esc(w.path)}" title="Switch panel to this worktree">Switch</button>
-                     <button type="button" class="btn btn-ghost btn-xs" data-wt-remove="${esc(w.path)}" style="color:var(--c-del)">Remove</button>`
+                  : `<button type="button" class="btn btn-ghost btn-xs" data-wt-switch="${esc(w.path)}" data-tip="Switch panel to this worktree">Switch</button>
+                     <button type="button" class="btn btn-ghost btn-xs" data-wt-remove="${esc(w.path)}" data-tip="Remove this worktree" style="color:var(--c-del)">Remove</button>`
               }
             </div>
           </div>`
@@ -1702,7 +1914,7 @@
           <div class="branch-row">
             <div class="branch-main">
               <div class="branch-title">${esc(r.name)}</div>
-              <div class="branch-meta mono" title="${esc(r.fetchUrl)}">${esc(r.fetchUrl)}</div>
+              <div class="branch-meta mono" data-tip="${esc(r.fetchUrl)}" data-tip-mono="1">${esc(r.fetchUrl)}</div>
             </div>
           </div>`
           )
@@ -1836,8 +2048,8 @@
           <span style="font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">#${it.number} ${esc(it.title)}</span>
           <div style="display:flex;gap:4px;align-items:center;flex-shrink:0">
             <a class="gh-link" href="${esc(it.htmlUrl)}" target="_blank" rel="noreferrer">Open ↗</a>
-            <button type="button" class="icon-btn icon-btn-sm" id="btn-gh-max" data-toggle-max="github" title="Maximize drawer">${state.maximized.github ? ICON_RESTORE : ICON_MAXIMIZE}</button>
-            <button type="button" class="icon-btn icon-btn-sm" id="btn-close-gh-detail" title="Close detail (Esc)">&times;</button>
+            <button type="button" class="icon-btn icon-btn-sm" id="btn-gh-max" data-toggle-max="github" data-tip="${state.maximized.github ? 'Restore split view' : 'Maximize drawer'}"${state.maximized.github ? ' data-tip-kbd="Esc"' : ''}>${state.maximized.github ? ICON_RESTORE : ICON_MAXIMIZE}</button>
+            <button type="button" class="icon-btn icon-btn-sm" id="btn-close-gh-detail" data-tip="Close detail" data-tip-kbd="Esc">&times;</button>
           </div>
         </div>
         <div class="detail-body">
@@ -2238,9 +2450,25 @@
   });
 
   // ---------- Graph Controls ----------
+  function syncGraphScopeUi(all) {
+    $('chk-all-branches').checked = Boolean(all);
+    $('btn-graph-scope-all').classList.toggle('on', Boolean(all));
+    $('btn-graph-scope-head').classList.toggle('on', !all);
+  }
+  function setGraphAllBranches(all) {
+    const flag = Boolean(all);
+    try {
+      localStorage.setItem('agy_git_graph_all_branches', flag ? '1' : '0');
+    } catch {}
+    syncGraphScopeUi(flag);
+    loadGraph(false);
+  }
+  syncGraphScopeUi(localStorage.getItem('agy_git_graph_all_branches') === '1');
+  $('btn-graph-scope-all').addEventListener('click', () => setGraphAllBranches(true));
+  $('btn-graph-scope-head').addEventListener('click', () => setGraphAllBranches(false));
   $('btn-graph-filters').addEventListener('click', () => $('graph-extra-filters').classList.toggle('hidden'));
   $('btn-graph-apply').addEventListener('click', () => loadGraph(false));
-  $('chk-all-branches').addEventListener('change', () => loadGraph(false));
+  $('chk-all-branches').addEventListener('change', () => setGraphAllBranches($('chk-all-branches').checked));
   $('chk-dim-merges').addEventListener('change', () => renderGraphList());
   let searchDebounce = null;
   $('graph-search').addEventListener('input', () => {

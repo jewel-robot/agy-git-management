@@ -1080,8 +1080,13 @@ tr.d-meta { color: var(--fg-muted); font-style: italic; }
 /* Graph Tab */
 .filter-bar {
   display: flex;
+  align-items: center;
   gap: 5px;
   margin-bottom: 8px;
+}
+.filter-bar .input {
+  min-width: 0;
+  flex: 1;
 }
 .extra-filters {
   background: var(--surface);
@@ -1484,4 +1489,76 @@ tr.d-meta { color: var(--fg-muted); font-style: italic; }
 }
 .toast-btn:hover {
   background: rgba(255, 255, 255, 0.3);
+}
+
+/* Custom Antigravity-Matched Tooltip */
+.agy-tooltip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 200;
+  max-width: min(300px, calc(100vw - 16px));
+  padding: 5px 8px;
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.06);
+  font-family: var(--font);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translate3d(0, 3px, 0);
+  transition: opacity 0.12s ease, transform 0.12s ease, visibility 0.12s ease;
+  word-break: break-word;
+}
+:root[data-theme="dark"] .agy-tooltip {
+  background: color-mix(in srgb, var(--surface) 88%, var(--fg) 12%);
+  border-color: color-mix(in srgb, var(--fg) 14%, transparent);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.28);
+}
+.agy-tooltip[data-placement="bottom"] {
+  transform: translate3d(0, -3px, 0);
+}
+.agy-tooltip.visible {
+  opacity: 1;
+  visibility: visible;
+  transform: translate3d(0, 0, 0);
+}
+.agy-tip-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.agy-tip-main {
+  color: var(--fg);
+}
+.agy-tip-main.mono {
+  font-size: 11px;
+  font-weight: 400;
+}
+.agy-tip-sub {
+  margin-top: 2px;
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--fg-muted);
+  line-height: 1.35;
+}
+.agy-tip-kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 4px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--muted-bg);
+  border: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-2);
+  line-height: 1;
 }

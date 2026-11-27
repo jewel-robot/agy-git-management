@@ -6,7 +6,7 @@
   <title>Git Management</title>
   <script src="/preload.js"></script>
   <link rel="stylesheet" media="print" onload="this.media='all'" onerror="this.remove()" href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:ROND,opsz,slnt,wdth,wght@0..100,6..144,-10..0,92..100,100..1000&family=Google+Sans+Code:ital,wght@0,300..800;1,300..800&display=swap">
-  <link rel="stylesheet" href="/styles.css?v=0.0.1-3">
+  <link rel="stylesheet" href="/styles.css?v=0.0.2">
 </head>
 <body>
   <div id="app" class="app">
@@ -15,7 +15,7 @@
       <div class="topbar-row">
         <div class="repo-wrap">
           <div id="repo-dropdown" class="custom-dd">
-            <button type="button" id="repo-trigger" class="dd-trigger" aria-haspopup="listbox" aria-expanded="false" title="Switch Git repository">
+            <button type="button" id="repo-trigger" class="dd-trigger" aria-haspopup="listbox" aria-expanded="false" data-tip="Switch Git repository" data-tip-pos="bottom">
               <svg class="dd-repo-icon" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.75A1.75 1.75 0 0 1 4.75 1h7.5A.75.75 0 0 1 13 1.75v10.5a.75.75 0 0 1-.75.75H4.75A1.75 1.75 0 0 0 3 14.75V2.75Z"/><path d="M3 13a1.75 1.75 0 0 1 1.75-1.75H13"/></svg>
               <span id="repo-trigger-label" class="dd-label">Loading…</span>
               <svg class="dd-chev" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m4.5 6.25 3.5 3.5 3.5-3.5"/></svg>
@@ -25,25 +25,25 @@
           <span id="op-badge" class="op-badge hidden"></span>
         </div>
         <div class="sync-actions">
-          <button type="button" class="icon-btn" id="btn-fetch" title="Fetch all remotes (--prune)">
+          <button type="button" class="icon-btn" id="btn-fetch" data-tip="Fetch all remotes (--prune)" data-tip-pos="bottom">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.35-3.6"/><path d="M13.5 2.5v2.75H10.75"/></svg>
           </button>
-          <button type="button" class="icon-btn" id="btn-pull" title="Pull from upstream">
+          <button type="button" class="icon-btn" id="btn-pull" data-tip="Pull from upstream" data-tip-pos="bottom">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5v9"/><path d="M4.5 8.5 8 12l3.5-3.5"/><path d="M3 13.5h10"/></svg>
             <span id="pull-badge" class="sync-badge num hidden"></span>
           </button>
-          <button type="button" class="icon-btn" id="btn-push" title="Push to remote">
+          <button type="button" class="icon-btn" id="btn-push" data-tip="Push to remote" data-tip-pos="bottom">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12V3"/><path d="M4.5 6.5 8 3l3.5 3.5"/><path d="M3 13.5h10"/></svg>
             <span id="push-badge" class="sync-badge num hidden"></span>
           </button>
-          <button type="button" class="icon-btn" id="btn-refresh" title="Refresh status">
+          <button type="button" class="icon-btn" id="btn-refresh" data-tip="Refresh status" data-tip-pos="bottom">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8a5.5 5.5 0 0 1 9.5-3.75L13.5 5.5"/><path d="M13.5 2.5v3h-3"/><path d="M13.5 8a5.5 5.5 0 0 1-9.5 3.75L2.5 10.5"/><path d="M2.5 13.5v-3h3"/></svg>
           </button>
         </div>
       </div>
 
       <div class="branch-strip">
-        <button type="button" id="branch-pill" class="branch-pill" title="Switch to Branches tab">
+        <button type="button" id="branch-pill" class="branch-pill" data-tip="Switch to Branches tab" data-tip-pos="bottom">
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="4.5" cy="3.5" r="1.75"/><circle cx="11.5" cy="5.5" r="1.75"/><circle cx="4.5" cy="12.5" r="1.75"/><path d="M4.5 5.25v5.5M4.5 9.5c0-2 7-1 7-2.25"/></svg>
           <span id="branch-name">…</span>
         </button>
@@ -76,26 +76,26 @@
             <div class="commit-box">
               <textarea id="commit-msg" class="commit-input" rows="2" placeholder="Commit message (Ctrl+Enter to commit)"></textarea>
               <div class="commit-bar">
-                <label class="check-label" title="Amend the previous commit">
+                <label class="check-label" data-tip="Amend the previous commit">
                   <input type="checkbox" id="chk-amend">
                   <span>Amend</span>
                 </label>
                 <div class="commit-btns">
-                  <button type="button" class="btn btn-ghost btn-sm" id="btn-stage-commit" title="Stage all changes and commit">Stage &amp; Commit</button>
-                  <button type="button" class="btn btn-primary btn-sm" id="btn-commit">Commit</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="btn-stage-commit" data-tip="Stage all changes and commit">Stage &amp; Commit</button>
+                  <button type="button" class="btn btn-primary btn-sm" id="btn-commit" data-tip="Commit staged changes" data-tip-kbd="Ctrl+Enter">Commit</button>
                 </div>
               </div>
             </div>
 
             <div class="scm-toolbar">
               <div class="segmented">
-                <button type="button" id="btn-view-flat" class="seg-btn on" title="Flat file list">Flat</button>
-                <button type="button" id="btn-view-tree" class="seg-btn" title="Directory tree">Tree</button>
+                <button type="button" id="btn-view-flat" class="seg-btn on" data-tip="Flat file list">Flat</button>
+                <button type="button" id="btn-view-tree" class="seg-btn" data-tip="Directory tree">Tree</button>
               </div>
               <div class="scm-toolbar-right">
-                <button type="button" class="btn btn-ghost btn-xs" id="btn-stage-all" title="Stage all changes">Stage All</button>
-                <button type="button" class="btn btn-ghost btn-xs" id="btn-unstage-all" title="Unstage all changes">Unstage All</button>
-                <button type="button" class="btn btn-ghost btn-xs" id="btn-stash-toggle" title="Create a new stash">+ Stash</button>
+                <button type="button" class="btn btn-ghost btn-xs" id="btn-stage-all" data-tip="Stage all changes">Stage All</button>
+                <button type="button" class="btn btn-ghost btn-xs" id="btn-unstage-all" data-tip="Unstage all changes">Unstage All</button>
+                <button type="button" class="btn btn-ghost btn-xs" id="btn-stash-toggle" data-tip="Create a new stash">+ Stash</button>
               </div>
             </div>
 
@@ -125,7 +125,7 @@
           </div>
         </div>
 
-        <div id="changes-resizer" class="split-resizer hidden" role="separator" aria-orientation="horizontal" title="Drag to resize · Double-click to reset"></div>
+        <div id="changes-resizer" class="split-resizer hidden" role="separator" aria-orientation="horizontal" data-tip="Drag to resize · Double-click to reset"></div>
 
         <!-- Docked Diff / Stash Preview Drawer -->
         <div id="diff-pane" class="diff-pane docked-drawer hidden">
@@ -140,10 +140,10 @@
                 <button type="button" id="btn-diff-unified" class="seg-btn on">Unified</button>
                 <button type="button" id="btn-diff-split" class="seg-btn">Split</button>
               </div>
-              <button type="button" class="icon-btn icon-btn-sm" id="btn-diff-max" data-toggle-max="changes" title="Maximize drawer">
+              <button type="button" class="icon-btn icon-btn-sm" id="btn-diff-max" data-toggle-max="changes" data-tip="Maximize drawer">
                 <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.5H2.5V6M10 2.5h3.5V6M13.5 10v3.5H10M2.5 10v3.5H6"/></svg>
               </button>
-              <button type="button" class="icon-btn icon-btn-sm" id="btn-diff-close" title="Close diff (Esc)">&times;</button>
+              <button type="button" class="icon-btn icon-btn-sm" id="btn-diff-close" data-tip="Close diff" data-tip-kbd="Esc">&times;</button>
             </div>
           </div>
           <div id="diff-body" class="diff-body"></div>
@@ -155,13 +155,17 @@
         <div class="split-top">
           <div class="filter-bar">
             <input type="search" id="graph-search" class="input" placeholder="Search commit messages...">
-            <button type="button" class="btn btn-ghost btn-xs" id="btn-graph-filters" title="More filters">Filters</button>
+            <div class="segmented" role="group" aria-label="Branch scope">
+              <button type="button" id="btn-graph-scope-all" class="seg-btn" data-tip="Show all branches, remotes &amp; tags">All</button>
+              <button type="button" id="btn-graph-scope-head" class="seg-btn on" data-tip="Show current branch (HEAD) only">HEAD</button>
+            </div>
+            <button type="button" class="btn btn-ghost btn-xs" id="btn-graph-filters" data-tip="More filters">Filters</button>
           </div>
           <div id="graph-extra-filters" class="extra-filters hidden">
             <input type="text" id="graph-author" class="input input-sm" placeholder="Filter by author...">
             <input type="text" id="graph-path" class="input input-sm" placeholder="Filter by file path...">
             <div class="extra-filters-row">
-              <label class="check-label"><input type="checkbox" id="chk-all-branches" checked><span>All branches</span></label>
+              <label class="check-label"><input type="checkbox" id="chk-all-branches"><span>All branches</span></label>
               <label class="check-label"><input type="checkbox" id="chk-dim-merges" checked><span>Dim merges</span></label>
               <button type="button" class="btn btn-primary btn-xs" id="btn-graph-apply">Apply</button>
             </div>
@@ -173,7 +177,7 @@
             </div>
           </div>
         </div>
-        <div id="graph-resizer" class="split-resizer hidden" role="separator" aria-orientation="horizontal" title="Drag to resize · Double-click to reset"></div>
+        <div id="graph-resizer" class="split-resizer hidden" role="separator" aria-orientation="horizontal" data-tip="Drag to resize · Double-click to reset"></div>
         <!-- Docked Commit Detail & Diff Drawer -->
         <div id="commit-detail" class="commit-detail docked-drawer hidden"></div>
       </section>
@@ -235,7 +239,7 @@
           <div class="gh-header">
             <div id="gh-repo-meta" class="gh-repo-meta">Detecting GitHub remote...</div>
             <div class="gh-header-actions">
-              <button type="button" class="btn btn-ghost btn-xs" id="btn-gh-token-toggle" title="Configure GitHub Personal Access Token">Token</button>
+              <button type="button" class="btn btn-ghost btn-xs" id="btn-gh-token-toggle" data-tip="Configure GitHub Personal Access Token">Token</button>
               <button type="button" class="btn btn-primary btn-xs" id="btn-gh-pr-toggle">+ New PR</button>
             </div>
           </div>
@@ -288,7 +292,7 @@
           </div>
         </div>
 
-        <div id="gh-resizer" class="split-resizer hidden" role="separator" aria-orientation="horizontal" title="Drag to resize · Double-click to reset"></div>
+        <div id="gh-resizer" class="split-resizer hidden" role="separator" aria-orientation="horizontal" data-tip="Drag to resize · Double-click to reset"></div>
         <div id="gh-detail" class="commit-detail docked-drawer hidden"></div>
       </section>
     </main>
@@ -310,11 +314,14 @@
   <div id="toast" class="toast hidden" role="status" aria-live="polite">
     <div id="toast-text" class="toast-text"></div>
     <div id="toast-actions" class="toast-actions hidden">
-      <button type="button" id="toast-copy" class="toast-btn" title="Copy message">Copy</button>
-      <button type="button" id="toast-close" class="toast-btn" title="Dismiss">&times;</button>
+      <button type="button" id="toast-copy" class="toast-btn" data-tip="Copy message">Copy</button>
+      <button type="button" id="toast-close" class="toast-btn" data-tip="Dismiss">&times;</button>
     </div>
   </div>
 
-  <script src="/app.js?v=0.0.1-3"></script>
+  <!-- Custom Antigravity-Matched Tooltip Portal -->
+  <div id="agy-tooltip" class="agy-tooltip" role="tooltip" aria-hidden="true"></div>
+
+  <script src="/app.js?v=0.0.2"></script>
 </body>
 </html>
