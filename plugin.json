@@ -2,7 +2,7 @@
   "$schema": "https://antigravity.google/schemas/v1/plugin.json",
   "name": "git-management",
   "displayName": "Git Management",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "VS Code-style Source Control sidecar panel for Antigravity: staging, hunk diffs, commits & amend, multi-color SVG commit graph, branches & worktrees, stash, sync, and GitHub PR/Issues.",
   "author": "jewel-robot",
   "homepage": "https://github.com/jewel-robot/agy-git-management",
